@@ -127,9 +127,25 @@ def origin(raw: str) -> str:
     if port == 0:
         raise ValueError("has an invalid port")
     # Normalised the way browsers send Origin, because the CSRF check compares exactly.
-    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else _ascii_host(parts.hostname)
     default = {"http": 80, "https": 443}[parts.scheme]
     return f"{parts.scheme}://{host}" + (f":{port}" if port not in (None, default) else "")
+
+
+# Characters the stdlib IDNA 2003 codec maps differently from browsers (UTS #46).
+_IDNA_DISAGREES = re.compile("[\u00df\u03c2\u200c\u200d]")
+
+
+def _ascii_host(host: str) -> str:
+    """The host as browsers put it in Origin: an IDN becomes its xn-- form."""
+    if host.isascii():
+        return host
+    if _IDNA_DISAGREES.search(host):
+        raise ValueError("has a host browsers encode differently; write it in its xn-- form")
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError:
+        raise ValueError("has a host that is not a valid domain name; use its xn-- form") from None
 
 
 def ip(raw: str) -> str:
