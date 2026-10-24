@@ -48,6 +48,8 @@ PASSWORD_PER_ACCOUNT = Limit("password-account", 10, timedelta(minutes=15))
 # Sign-up and invite-code guessing: per IP, and a ceiling for the whole instance.
 SIGNUP_PER_IP = Limit("signup-ip", 10, timedelta(hours=1))
 SIGNUP_PER_INSTANCE = Limit("signup-instance", 100, timedelta(hours=1))
+# Reset tokens are 256 bits, so this only slows noise and protects the hashing slots.
+RESET_PER_IP = Limit("reset-ip", 10, timedelta(hours=1))
 
 
 def ip_subject(ip: str) -> str:

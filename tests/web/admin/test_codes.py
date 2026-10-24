@@ -54,7 +54,8 @@ def admin_routes(config: WebConfig) -> list[tuple[str, str]]:
 
 
 def call(client: TestClient, method: str, path: str) -> int:
-    concrete = path.replace("{code_id}", "00000000-0000-7000-8000-000000000000")
+    some_id = "00000000-0000-7000-8000-000000000000"
+    concrete = path.replace("{code_id}", some_id).replace("{user_id}", some_id)
     return client.request(method, concrete, json={}).status_code
 
 

@@ -7,7 +7,7 @@ from zoneinfo import available_timezones
 from anyio import to_thread
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
-from sqlalchemy import func
+from sqlalchemy import func, update
 
 from learning_tracker.db.models import PasswordChangeSource, User
 from learning_tracker.web.auth.deps import (
@@ -22,12 +22,14 @@ from learning_tracker.web.auth.deps import (
 )
 from learning_tracker.web.auth.manager import UserManager
 from learning_tracker.web.auth.passwords import MAX_PASSWORD, MIN_PASSWORD
+from learning_tracker.web.auth.resets import consume_reset
 from learning_tracker.web.auth.sessions import COOKIE_NAME, SessionStore, cookie_transport
 from learning_tracker.web.auth.signup import SignupRefused, create_account
 from learning_tracker.web.config import WebConfig
 from learning_tracker.web.ratelimit import (
     LOGIN_PER_IP,
     PASSWORD_PER_ACCOUNT,
+    RESET_PER_IP,
     SIGNUP_PER_INSTANCE,
     SIGNUP_PER_IP,
     RateLimiter,
@@ -71,6 +73,14 @@ class SignupIn(Strict):
     password: str = Field(min_length=MIN_PASSWORD, max_length=MAX_PASSWORD)
     timezone: Annotated[str, AfterValidator(_known_timezone)] = Field(max_length=64)
     code: str | None = Field(default=None, max_length=64)
+
+
+class ResetIn(Strict):
+    token: str = Field(max_length=64)
+    new_password: str = Field(min_length=MIN_PASSWORD, max_length=MAX_PASSWORD)
+
+
+LINK_UNUSABLE = "This link can't be used. It may have expired or been used already."
 
 
 class MeOut(BaseModel):
@@ -146,6 +156,36 @@ async def signup(
     response = await cookie_transport(sessions.lifetime).get_login_response(token)
     response.status_code = status.HTTP_201_CREATED
     return response
+
+
+@router.post("/auth/reset", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_password(
+    body: ResetIn,
+    request: Request,
+    db: DB,
+    manager: Manager,
+    sessions: Sessions,
+    limiter: Limiter,
+) -> Response:
+    await enforce(limiter, RESET_PER_IP, client_ip(request))
+    config: WebConfig = request.app.state.config
+    # Hash first: a refused new password must not spend the token.
+    async with password_slot(request):
+        hashed = await to_thread.run_sync(manager.password_helper.hash, body.new_password)
+    spent = await consume_reset(db, config.reset_key, body.token)
+    if spent is None:
+        log.info("auth.reset_failed")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, LINK_UNUSABLE)
+    user_id, via = spent
+    await db.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(hashed_password=hashed, password_changed_at=func.now(), password_changed_via=via)
+    )
+    await sessions.revoke_all(user_id)  # every device signs in again
+    await db.commit()
+    log.info("auth.reset user_id=%s via=%s", user_id, via)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)

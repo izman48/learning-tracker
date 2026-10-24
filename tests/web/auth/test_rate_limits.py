@@ -237,4 +237,5 @@ def test_production_limits_are_the_documented_ones() -> None:
         "PASSWORD_PER_ACCOUNT": (10, timedelta(minutes=15)),
         "SIGNUP_PER_IP": (10, timedelta(hours=1)),
         "SIGNUP_PER_INSTANCE": (100, timedelta(hours=1)),
+        "RESET_PER_IP": (10, timedelta(hours=1)),
     }
