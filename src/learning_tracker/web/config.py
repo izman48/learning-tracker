@@ -14,9 +14,12 @@ class WebConfig:
     public_origin: str
     ip_key: bytes = field(repr=False)  # HMAC key for IPs and emails in rate-limit buckets
     invite_key: bytes = field(repr=False)  # HMAC key for stored invite codes
+    reset_key: bytes = field(repr=False)  # HMAC key for stored reset tokens
     trusted_proxy_ips: tuple[str, ...] = ()
     invite_required: bool = True
     max_users: int = 50
+    mailer_enabled: bool = False
+    reset_token_minutes: int = 30
 
     @classmethod
     def from_settings(cls, settings: Settings) -> WebConfig:
@@ -29,7 +32,10 @@ class WebConfig:
             public_origin=settings.public_origin,
             ip_key=settings.require_keys().ip,
             invite_key=settings.require_keys().invite,
+            reset_key=settings.require_keys().reset,
             trusted_proxy_ips=settings.trusted_proxy_ips,
             invite_required=settings.invite_required,
             max_users=settings.max_users,
+            mailer_enabled=settings.mailer_enabled,
+            reset_token_minutes=settings.reset_token_minutes,
         )

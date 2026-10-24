@@ -13,6 +13,7 @@ CONFIG = WebConfig(
     public_origin="https://reads.example.com",
     ip_key=b"i" * 32,
     invite_key=b"v" * 32,
+    reset_key=b"r" * 32,
 )
 
 

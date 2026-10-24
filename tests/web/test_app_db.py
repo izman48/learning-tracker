@@ -17,6 +17,7 @@ def test_startup_provides_a_working_session_factory(migrated_database_url: str) 
         public_origin="https://reads.example.com",
         ip_key=b"i" * 32,
         invite_key=b"v" * 32,
+        reset_key=b"r" * 32,
     )
     app = create_app(config)
 

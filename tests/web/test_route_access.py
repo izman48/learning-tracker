@@ -18,6 +18,7 @@ PUBLIC = {
     ("GET", "/healthz"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/signup"),
+    ("POST", "/api/auth/reset"),  # the reset token is the credential
     ("POST", "/api/auth/logout"),  # works without a session: just clears the cookie
 }
 

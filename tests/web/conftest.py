@@ -27,6 +27,7 @@ def config(migrated_database_url: str) -> WebConfig:
         public_origin=ORIGIN,
         ip_key=b"i" * 32,
         invite_key=b"v" * 32,
+        reset_key=b"r" * 32,
     )
 
 
@@ -64,7 +65,13 @@ def add_user(migrated_database_url: str) -> Iterator[object]:
 # (the counts, the order of checks and Retry-After stay real); the production values
 # are pinned separately in tests/web/auth/test_rate_limits.py.
 TEST_WINDOW = timedelta(days=3650)
-LIMIT_NAMES = ("LOGIN_PER_IP", "PASSWORD_PER_ACCOUNT", "SIGNUP_PER_IP", "SIGNUP_PER_INSTANCE")
+LIMIT_NAMES = (
+    "LOGIN_PER_IP",
+    "PASSWORD_PER_ACCOUNT",
+    "SIGNUP_PER_IP",
+    "SIGNUP_PER_INSTANCE",
+    "RESET_PER_IP",
+)
 PRODUCTION_LIMITS = {name: getattr(ratelimit_module, name) for name in LIMIT_NAMES}
 
 
