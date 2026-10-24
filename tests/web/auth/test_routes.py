@@ -117,7 +117,7 @@ def test_sign_out_ends_the_session_and_clears_the_device(
     login(client, "reader@example.com")
     token = client.cookies[COOKIE_NAME]
 
-    response = client.post("/api/auth/logout")
+    response = client.post("/api/auth/logout", json={})
 
     assert response.status_code == 204
     assert response.headers["clear-site-data"] == '"cache", "storage"'
@@ -144,7 +144,9 @@ def test_change_password_ends_other_sessions_and_rotates_this_one(
     config: WebConfig, client: TestClient, add_user: AddUser
 ) -> None:
     add_user()
-    with TestClient(create_app(config), base_url="https://testserver") as phone:
+    with TestClient(
+        create_app(config), base_url="https://testserver", headers={"origin": config.public_origin}
+    ) as phone:
         login(phone, "reader@example.com")
         login(client, "reader@example.com")
         before = client.cookies[COOKIE_NAME]
@@ -221,7 +223,7 @@ def test_auth_logs_hold_no_email_password_or_token(
         "/api/me/password",
         json={"current_password": PASSWORD, "new_password": "a brand new passphrase"},
     )
-    client.post("/api/auth/logout")
+    client.post("/api/auth/logout", json={})
 
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert "auth.login_failed" in logged and "auth.login" in logged  # precondition

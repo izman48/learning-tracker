@@ -29,7 +29,10 @@ def config(migrated_database_url: str) -> WebConfig:
 @pytest.fixture
 def client(config: WebConfig) -> Iterator[TestClient]:
     # https, because the browser (and httpx) only send a Secure cookie over https.
-    with TestClient(create_app(config), base_url="https://testserver") as client:
+    # The Origin header is what our own PWA sends; CSRF tests override or drop it.
+    with TestClient(
+        create_app(config), base_url="https://testserver", headers={"origin": ORIGIN}
+    ) as client:
         yield client
 
 
