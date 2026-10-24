@@ -156,3 +156,75 @@ async def test_the_connector_vets_every_request_afresh(local_server: TestServer)
             await session.get(url)
     assert isinstance(info.value.os_error, UnsafeAddress)
     assert dns.lookups == ["control.example", "control.example"]
+
+
+# --- IP-literal hosts skip the resolver, so the connector also vets every socket ---
+
+
+def caused_by_unsafe_address(exc: BaseException) -> bool:
+    """True if UnsafeAddress is anywhere in the exception's cause chain or group."""
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        e = stack.pop()
+        if id(e) in seen:
+            continue
+        seen.add(id(e))
+        if isinstance(e, UnsafeAddress):
+            return True
+        stack += [x for x in (e.__cause__, e.__context__, getattr(e, "os_error", None)) if x]
+        stack += list(getattr(e, "exceptions", ()))
+    return False
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:{port}/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.1/",
+        "http://[::1]:{port}/",
+        "http://[::ffff:127.0.0.1]:{port}/",
+    ],
+)
+async def test_ip_literal_hosts_are_refused_at_connect_time(
+    local_server: TestServer, url: str
+) -> None:
+    timeout = aiohttp.ClientTimeout(total=3)  # an unvetted connect must not hang the suite
+    async with aiohttp.ClientSession(connector=safe_connector(), timeout=timeout) as session:
+        with pytest.raises(aiohttp.ClientConnectorError) as info:
+            await session.get(url.format(port=local_server.port))
+    assert caused_by_unsafe_address(info.value)
+
+
+async def test_literal_control_reaches_the_harness_when_policy_allows_it(
+    local_server: TestServer,
+) -> None:
+    connector = safe_connector(is_allowed=only_the_harness_is_public("127.0.0.1"))
+    url = f"http://127.0.0.1:{local_server.port}/"
+    async with aiohttp.ClientSession(connector=connector) as session, session.get(url) as resp:
+        assert resp.status == 200
+
+
+async def test_a_redirect_to_an_ip_literal_is_refused_at_the_second_hop() -> None:
+    hits: list[str] = []
+
+    async def jump(request: web.Request) -> web.Response:
+        hits.append(request.path)
+        # 127.0.0.2 is loopback too; the policy allows only the harness's 127.0.0.1.
+        raise web.HTTPFound(f"http://127.0.0.2:{request.url.port}/inside")
+
+    app = web.Application()
+    app.router.add_get("/", jump)
+    server = TestServer(app, host="127.0.0.1")
+    await server.start_server()
+    try:
+        dns = FakeDNS({"public.example": ["127.0.0.1"]})
+        connector = safe_connector(dns, is_allowed=only_the_harness_is_public("127.0.0.1"))
+        async with aiohttp.ClientSession(connector=connector) as session:
+            with pytest.raises(aiohttp.ClientConnectorError) as info:
+                await session.get(f"http://public.example:{server.port}/", allow_redirects=True)
+    finally:
+        await server.close()
+    assert hits == ["/"]  # the first hop was served (control), the second never connected
+    assert caused_by_unsafe_address(info.value)
