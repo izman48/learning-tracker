@@ -23,6 +23,8 @@ lt = "learning_tracker.cli:main"
 
 [dependency-groups]
 dev = [
+    "aiosmtpd==1.4.6",
+    "atpublic==8.0.1",
     "httpx2==2.13.1",
     "mypy==2.4.0",
     "pip-audit==2.10.1",
