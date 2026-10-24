@@ -36,3 +36,19 @@ def empty_database_url() -> Iterator[str]:
         with admin.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin.dispose()
+
+
+@pytest.fixture
+def migrated_database_url(empty_database_url: str) -> str:
+    """A fresh database with every migration applied."""
+    from alembic import command
+
+    from learning_tracker.db.migrate import alembic_config
+
+    command.upgrade(alembic_config(empty_database_url), "head")
+    return empty_database_url
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
