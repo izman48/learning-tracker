@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from learning_tracker.db.engine import make_engine, make_session_factory
+from learning_tracker.web.auth.routes import router as auth_router
 from learning_tracker.web.config import WebConfig
 
 
@@ -20,6 +21,7 @@ def create_app(config: WebConfig) -> FastAPI:
     # No published API docs: the API is for our own PWA, not a public surface.
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.config = config
+    app.include_router(auth_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
