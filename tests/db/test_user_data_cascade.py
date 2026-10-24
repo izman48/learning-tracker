@@ -20,6 +20,7 @@ SET_NULL_ALLOWED = {
     ("invite_codes", "created_by"),
     ("invite_redemptions", "user_id"),
     ("password_resets", "created_by"),
+    ("spend_ledger", "scope_user_id"),  # money audit outlives the account, detached
 }
 
 

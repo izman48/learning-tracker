@@ -11,11 +11,12 @@ Rules every table follows:
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -169,3 +170,69 @@ class RateLimitBucket(Base):
     key: Mapped[str] = mapped_column(String(160), primary_key=True)
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     count: Mapped[int] = mapped_column(Integer)
+
+
+class SpendPeriodKind(enum.StrEnum):
+    MONTH = "month"
+    DAY = "day"
+
+
+class SpendState(enum.StrEnum):
+    RESERVED = "reserved"  # counted against the caps before the paid call
+    SETTLED = "settled"  # actual cost known, at or below the reservation
+    SETTLED_FULL = "settled_full"  # outcome unknown (timeout, crash): kept in full
+    OVERAGE = "overage"  # actual above the reservation; recorded even past the cap
+    ANOMALY = "anomaly"  # the provider reported something outside the request's bounds
+
+
+class SpendPeriod(Base):
+    """One cap's running total for one period. `used_micros` may exceed `cap_micros`
+    after an overage, which is what makes the next reservation fail."""
+
+    __tablename__ = "spend_periods"
+    __table_args__ = (
+        CheckConstraint("cap_micros >= 0", name="cap_not_negative"),
+        CheckConstraint("used_micros >= 0", name="used_not_negative"),
+    )
+
+    scope_key: Mapped[str] = mapped_column(String(64), primary_key=True)  # instance | user:<id>
+    period_kind: Mapped[SpendPeriodKind] = mapped_column(
+        Enum(
+            SpendPeriodKind,
+            name="spend_period_kind",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        primary_key=True,
+    )
+    period_start: Mapped[date] = mapped_column(Date, primary_key=True)
+    cap_micros: Mapped[int] = mapped_column(BigInteger)
+    used_micros: Mapped[int] = mapped_column(BigInteger, server_default="0")
+
+
+class SpendLedger(Base):
+    """Every paid call: what was reserved, what it cost, and the periods it charged."""
+
+    __tablename__ = "spend_ledger"
+    __table_args__ = (
+        CheckConstraint("reserved_micros >= 0", name="reserved_not_negative"),
+        CheckConstraint("actual_micros IS NULL OR actual_micros >= 0", name="actual_not_negative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    scope_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(USER_FK, ondelete="SET NULL"), index=True
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column()  # pipeline run (table arrives in B2)
+    step: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(100))
+    reserved_micros: Mapped[int] = mapped_column(BigInteger)
+    actual_micros: Mapped[int | None] = mapped_column(BigInteger)
+    state: Mapped[SpendState] = mapped_column(
+        Enum(SpendState, name="spend_state", values_callable=lambda e: [m.value for m in e])
+    )
+    # The periods this call was charged to, so settling after midnight or month-end
+    # adjusts the same rows the reservation did.
+    month_start: Mapped[date | None] = mapped_column(Date)
+    day_start: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = created_at_column()
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
