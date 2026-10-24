@@ -21,6 +21,8 @@ BASELINE_TABLES = {
     "invite_redemptions",
     "admin_audit",
     "rate_limit_buckets",
+    "spend_periods",
+    "spend_ledger",
 }
 
 
