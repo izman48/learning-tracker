@@ -4,6 +4,7 @@ shares the per-account bucket. Limits answer 429 with Retry-After."""
 import logging
 from collections.abc import Callable, Iterator
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +13,7 @@ from sqlalchemy import create_engine, select
 from learning_tracker.db.models import RateLimitBucket
 from learning_tracker.web.app import create_app
 from learning_tracker.web.config import WebConfig
-from tests.web.conftest import ORIGIN
+from tests.web.conftest import ORIGIN, PRODUCTION_LIMITS, TEST_WINDOW
 
 PASSWORD = "correct horse battery"
 AddUser = Callable[..., str]
@@ -42,7 +43,7 @@ def login(client: TestClient, email: str, password: str = "wrong password") -> i
     return client.post("/api/auth/login", json={"email": email, "password": password}).status_code
 
 
-def test_per_ip_limit_is_5_a_minute_with_retry_after(
+def test_per_ip_limit_with_retry_after(
     from_ip: Callable[[str], TestClient], add_user: AddUser
 ) -> None:
     add_user()
@@ -55,7 +56,7 @@ def test_per_ip_limit_is_5_a_minute_with_retry_after(
     )
 
     assert response.status_code == 429
-    assert 0 < int(response.headers["retry-after"]) <= 60
+    assert 0 < int(response.headers["retry-after"]) <= TEST_WINDOW.total_seconds()
     assert response.json() == {"detail": "Too many tries. Wait a few minutes, then try again."}
 
 
@@ -227,3 +228,13 @@ def test_password_hashing_fails_fast_when_every_slot_is_busy(
     assert response.headers["retry-after"] == "1"
     client.app.state.password_slots.capacity = 1  # type: ignore[attr-defined]
     assert login(client, "reader@example.com", PASSWORD) == 204  # precondition: slots work
+
+
+def test_production_limits_are_the_documented_ones() -> None:
+    # Captured before the autouse fixture stretches them for every other test.
+    assert {name: (limit.max_hits, limit.window) for name, limit in PRODUCTION_LIMITS.items()} == {
+        "LOGIN_PER_IP": (5, timedelta(minutes=1)),
+        "PASSWORD_PER_ACCOUNT": (10, timedelta(minutes=15)),
+        "SIGNUP_PER_IP": (10, timedelta(hours=1)),
+        "SIGNUP_PER_INSTANCE": (100, timedelta(hours=1)),
+    }

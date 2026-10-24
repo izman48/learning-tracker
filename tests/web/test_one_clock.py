@@ -18,6 +18,7 @@ from sqlalchemy import create_engine, text, update
 from learning_tracker.db.models import Session
 from learning_tracker.web.auth.sessions import COOKIE_NAME
 from learning_tracker.web.config import WebConfig
+from tests.web.conftest import TEST_WINDOW
 
 SKEW = timedelta(minutes=15)
 MODULES = (
@@ -88,4 +89,4 @@ def test_rate_limit_retry_after_comes_from_the_database_clock(
     response = client.post("/api/auth/login", json={"email": "x@example.com", "password": "x"})
 
     assert response.status_code == 429
-    assert 0 < int(response.headers["retry-after"]) <= 60
+    assert 0 < int(response.headers["retry-after"]) <= TEST_WINDOW.total_seconds()
