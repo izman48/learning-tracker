@@ -21,6 +21,7 @@ from learning_tracker.worker.models.client import (
     ModelRateLimited,
     ModelRefused,
     ModelTimeout,
+    ModelTuning,
     ModelUnavailable,
     Step,
     UntrustedBlock,
@@ -59,14 +60,18 @@ def message(text: str = '{"keep": true, "reason": "ok"}', **extra: Any) -> dict[
 Handler = Callable[[httpx2.Request], httpx2.Response]
 
 
-def client_with(handler: Handler) -> tuple[AnthropicModelClient, list[httpx2.Request]]:
+def client_with(
+    handler: Handler, tuning: ModelTuning | None = None
+) -> tuple[AnthropicModelClient, list[httpx2.Request]]:
     seen: list[httpx2.Request] = []
 
     def record(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         return handler(request)
 
-    return AnthropicModelClient("test-key-not-real", transport=httpx2.MockTransport(record)), seen
+    transport = httpx2.MockTransport(record)
+    client = AnthropicModelClient("test-key-not-real", transport=transport, tuning=tuning)
+    return client, seen
 
 
 def replying(status: int, body: dict[str, Any], headers: dict[str, str] | None = None) -> Handler:
@@ -240,3 +245,21 @@ def test_block_labels_are_allow_listed_so_they_cannot_break_the_fence(label: str
     assert AnthropicModelClient.render([UntrustedBlock("hn-comments_2", "x")], tag="untrusted-a")
     with pytest.raises(ValueError, match="label"):
         AnthropicModelClient.render([UntrustedBlock(label, "x")], tag="untrusted-a")
+
+
+async def test_thinking_off_and_low_effort_are_sent_only_where_the_model_supports_them() -> None:
+    tuning = ModelTuning(thinking_off=frozenset({"claude-haiku-5-5"}),
+                         effort_low=frozenset({"claude-haiku-5-5"}))  # fmt: skip
+    client, seen = client_with(replying(200, message()), tuning)
+    await call(client)
+    body = json.loads(seen[0].content)
+    assert body["thinking"] == {"type": "disabled"}
+    assert body["output_config"]["effort"] == "low"
+    assert body["output_config"]["format"]["type"] == "json_schema"  # schema kept
+
+
+async def test_without_capability_data_neither_setting_is_sent() -> None:
+    client, seen = client_with(replying(200, message()))
+    await call(client)
+    body = json.loads(seen[0].content)
+    assert "thinking" not in body and "effort" not in body["output_config"]
