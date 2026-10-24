@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from learning_tracker.db.engine import make_engine, make_session_factory
 from learning_tracker.web.auth.routes import router as auth_router
 from learning_tracker.web.config import WebConfig
+from learning_tracker.web.security import SecurityMiddleware
 
 
 async def validation_error(_request: Request, exc: Exception) -> JSONResponse:
@@ -35,6 +36,7 @@ def create_app(config: WebConfig) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.config = config
     app.add_exception_handler(RequestValidationError, validation_error)
+    app.add_middleware(SecurityMiddleware, public_origin=config.public_origin)
     app.include_router(auth_router)
 
     @app.get("/healthz")
