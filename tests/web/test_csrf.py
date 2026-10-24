@@ -4,8 +4,12 @@ SameSite=Lax already keeps the cookie off most cross-site POSTs; this is the
 second layer, and it does not depend on the browser's cookie rules."""
 
 import pytest
+from fastapi import WebSocket
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
+from learning_tracker.web.app import create_app
+from learning_tracker.web.config import WebConfig
 from tests.web.conftest import ORIGIN
 
 LOGIN = {"email": "reader@example.com", "password": "correct horse battery"}
@@ -81,3 +85,25 @@ def test_unusual_methods_are_unsafe_by_default(client: TestClient, method: str) 
     client.headers.pop("origin")
 
     assert client.request(method, "/api/me").status_code == 403
+
+
+def test_a_websocket_without_our_origin_is_refused(config: WebConfig) -> None:
+    # No WebSocket route exists today; any added later is cross-site-hijackable unless
+    # the handshake's Origin is checked, so the middleware closes foreign handshakes.
+    app = create_app(config)
+
+    @app.websocket("/api/ws-probe")
+    async def probe(ws: WebSocket) -> None:
+        await ws.accept()
+        await ws.send_text("hello")
+        await ws.close()
+
+    client = TestClient(app)
+    with client.websocket_connect("/api/ws-probe", headers={"origin": ORIGIN}) as ws:
+        assert ws.receive_text() == "hello"  # precondition: our own origin connects
+    for headers in ({"origin": "https://evil.example.org"}, {}):
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect("/api/ws-probe", headers=headers) as ws,
+        ):
+            ws.receive_text()
