@@ -10,9 +10,10 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from learning_tracker.fetcher.client import fetcher_session
+from learning_tracker.fetcher.client import fetcher_session, guarded_session
 from learning_tracker.fetcher.fetch import Outcome
 from learning_tracker.fetcher.polite import MAX_RETRY_AFTER_S, ROBOTS_TTL_S, PoliteFetcher
+from learning_tracker.fetcher.resolver import vetted_socket_factory
 from tests.fetcher.harness import FakeDNS, only_the_harness_is_public
 
 pytestmark = pytest.mark.anyio
@@ -34,6 +35,7 @@ class Site:
     in_flight: dict[str, int] = field(default_factory=dict)
     peak: dict[str, int] = field(default_factory=dict)
     total_peak: int = 0
+    port: int = 0
 
 
 class Clock:
@@ -54,6 +56,8 @@ async def handle(request: web.Request) -> web.StreamResponse:
             await asyncio.sleep(30)
         if host == "jump.example":
             raise web.HTTPFound("http://169.254.169.254/robots.txt")
+        if host == "rebind.example":
+            raise web.HTTPFound(f"http://{METADATA_HOST}/robots.txt")
         status, body = site.robots.get(host, (404, ""))
         return web.Response(status=status, text=body, content_type="text/plain")
     if path == "/slow":
@@ -72,7 +76,15 @@ async def handle(request: web.Request) -> web.StreamResponse:
     return web.Response(text=HTML, content_type="text/html")
 
 
-HOSTS = ["site.example", "stall.example", "jump.example"] + [f"h{i}.example" for i in range(6)]
+HOSTS = ["site.example", "stall.example", "jump.example", "rebind.example"] + [
+    f"h{i}.example" for i in range(6)
+]
+METADATA_HOST = "meta.rebind.example"  # same site as rebind.example, resolves to metadata
+
+
+def world_dns(site: Site) -> FakeDNS:
+    table = {h: ["127.0.0.1"] for h in HOSTS} | {METADATA_HOST: ["169.254.169.254"]}
+    return FakeDNS(table, port=site.port)
 
 
 @pytest.fixture
@@ -83,9 +95,12 @@ async def world() -> AsyncIterator[tuple[aiohttp.ClientSession, Site]]:
     app.router.add_route("GET", "/{tail:.*}", handle)
     server = TestServer(app, host="127.0.0.1")
     await server.start_server()
-    dns = FakeDNS({h: ["127.0.0.1"] for h in HOSTS}, port=server.port)
+    assert server.port is not None
+    site.port = server.port
     session = fetcher_session(
-        "https://example.com/c", resolver=dns, is_allowed=only_the_harness_is_public("127.0.0.1")
+        "https://example.com/c",
+        resolver=world_dns(site),
+        is_allowed=only_the_harness_is_public("127.0.0.1"),
     )
     yield session, site
     await session.close()
@@ -137,7 +152,10 @@ async def test_a_robots_server_error_disallows_the_whole_host(
     session, site = world
     site.robots["site.example"] = (status, "")
     r = await polite(session).fetch("http://site.example/page")
-    assert (r.outcome, r.reason) == (Outcome.BLOCKED, "robots.txt")
+    assert (r.outcome, r.reason) == (
+        Outcome.BLOCKED,
+        f"robots.txt unavailable: blocked (http {status})",
+    )
     assert site.hits == ["site.example/robots.txt"]
 
 
@@ -146,7 +164,7 @@ async def test_a_robots_timeout_disallows_the_whole_host(
 ) -> None:
     session, site = world
     r = await polite(session).fetch("http://stall.example/page")
-    assert (r.outcome, r.reason) == (Outcome.BLOCKED, "robots.txt")
+    assert (r.outcome, r.reason) == (Outcome.BLOCKED, "robots.txt unavailable: timeout (deadline)")
     assert "stall.example/page" not in site.hits
 
 
@@ -155,8 +173,45 @@ async def test_a_robots_redirect_to_metadata_is_refused_and_disallows_the_host(
 ) -> None:
     session, site = world
     r = await polite(session).fetch("http://jump.example/page")
-    assert (r.outcome, r.reason) == (Outcome.BLOCKED, "robots.txt")
+    # Refused as unsafe by the URL guard, not merely failed.
+    assert (r.outcome, r.reason) == (
+        Outcome.BLOCKED,
+        "robots.txt unavailable: unsafe (ip literal host)",
+    )
     assert site.hits == ["jump.example/robots.txt"]  # neither the page nor metadata
+
+
+async def test_a_robots_redirect_to_a_same_site_host_on_metadata_is_refused(
+    world: tuple[aiohttp.ClientSession, Site],
+) -> None:
+    session, site = world
+    r = await polite(session).fetch("http://rebind.example/page")
+    assert (r.outcome, r.reason) == (
+        Outcome.BLOCKED,
+        "robots.txt unavailable: unsafe (non-public address)",
+    )
+    assert site.hits == ["rebind.example/robots.txt"]
+
+
+async def test_the_connect_time_check_alone_stops_a_same_site_host_on_metadata(
+    world: tuple[aiohttp.ClientSession, Site],
+) -> None:
+    """With no DNS-time vetting at all, the socket check still refuses the robots hop."""
+    _, site = world
+    dns = world_dns(site)
+    assert "169.254.169.254" in [a["host"] for a in await dns.resolve(METADATA_HOST)]  # unvetted
+    policy = only_the_harness_is_public("127.0.0.1")
+    connector = aiohttp.TCPConnector(
+        resolver=dns, use_dns_cache=False, socket_factory=vetted_socket_factory(policy)
+    )
+    async with guarded_session(connector=connector) as session:
+        assert (await polite(session).fetch("http://site.example/page")).outcome == Outcome.OK
+        r = await polite(session).fetch("http://rebind.example/page")
+    assert (r.outcome, r.reason) == (
+        Outcome.BLOCKED,
+        "robots.txt unavailable: unsafe (non-public address)",
+    )
+    assert "rebind.example/page" not in site.hits
 
 
 async def test_robots_is_fetched_once_per_host_per_day(

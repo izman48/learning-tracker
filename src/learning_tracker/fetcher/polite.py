@@ -5,6 +5,8 @@
   redirects to an internal address is refused like any page). It is cached per host
   for a day. A 4xx means "no rules, allow all"; a 5xx, timeout or refusal means
   "disallow all" for the day, as major crawlers treat it.
+  A blocked result says which: "robots.txt" for a rule, or
+  "robots.txt unavailable: <outcome> (<reason>)" for the fetch that failed.
 - A 429 or 503 with Retry-After (seconds or an HTTP date, capped at three days) holds
   that host: nothing is sent to it before then.
 - Each URL gets at most MAX_ATTEMPTS fetches in this process; the pipeline keeps the
@@ -36,6 +38,7 @@ MAX_RETRY_AFTER_S = 3 * 24 * 3600
 MAX_ATTEMPTS = 3
 
 Clock = Callable[[], float]
+Robots = urllib.robotparser.RobotFileParser | FetchResult  # the rules, or why there are none
 
 
 class PoliteFetcher:
@@ -49,7 +52,7 @@ class PoliteFetcher:
         self._session = session
         self._clock = clock
         self._deadline = deadline
-        self._robots: dict[str, tuple[float, urllib.robotparser.RobotFileParser | None]] = {}
+        self._robots: dict[str, tuple[float, Robots]] = {}
         self._held_until: dict[str, float] = {}
         self._attempts: dict[str, int] = {}
 
@@ -63,8 +66,9 @@ class PoliteFetcher:
             return FetchResult(url, Outcome.BLOCKED, "retry-after")
         if self._attempts.get(url, 0) >= MAX_ATTEMPTS:
             return FetchResult(url, Outcome.BLOCKED, "attempt limit")
-        if not await self._robots_allow(target.scheme, host, str(target.url)):
-            return FetchResult(url, Outcome.BLOCKED, "robots.txt")
+        refusal = await self._robots_refusal(target.scheme, host, str(target.url))
+        if refusal:
+            return FetchResult(url, Outcome.BLOCKED, refusal)
         self._attempts[url] = self._attempts.get(url, 0) + 1
         result = await fetch_page(self._session, url, deadline=self._deadline)
         if result.status in (429, 503):
@@ -73,19 +77,21 @@ class PoliteFetcher:
                 self._held_until[host] = self._clock() + wait
         return result
 
-    async def _robots_allow(self, scheme: str, host: str, url: str) -> bool:
+    async def _robots_refusal(self, scheme: str, host: str, url: str) -> str:
+        """Why robots.txt stops this URL, or "" when it may be fetched."""
         cached = self._robots.get(host)
         if cached is None or cached[0] <= self._clock():
-            rules = await self._load_robots(scheme, host)
-            self._robots[host] = (self._clock() + ROBOTS_TTL_S, rules)
+            robots = await self._load_robots(scheme, host)
+            self._robots[host] = (self._clock() + ROBOTS_TTL_S, robots)
             cached = self._robots[host]
-        rules = cached[1]
-        return rules is not None and rules.can_fetch(ROBOTS_AGENT_NAME, url)
+        robots = cached[1]
+        if isinstance(robots, FetchResult):
+            return f"robots.txt unavailable: {robots.outcome} ({robots.reason})"
+        return "" if robots.can_fetch(ROBOTS_AGENT_NAME, url) else "robots.txt"
 
-    async def _load_robots(
-        self, scheme: str, host: str
-    ) -> urllib.robotparser.RobotFileParser | None:
-        """The host's rules, an allow-all parser for a 4xx, or None for "disallow all"."""
+    async def _load_robots(self, scheme: str, host: str) -> Robots:
+        """The host's rules, an allow-all parser for a 4xx, or the failed fetch, which
+        disallows the host."""
         robots_url = f"{scheme}://{host}/robots.txt"
         result = await fetch_page(self._session, robots_url, deadline=self._deadline, body=ROBOTS)
         parser = urllib.robotparser.RobotFileParser()
@@ -95,7 +101,7 @@ class PoliteFetcher:
         if result.status is not None and 400 <= result.status < 500 and result.status != 429:
             parser.parse([])  # no file: no rules
             return parser
-        return None  # 5xx, 429, timeout, refused or unsafe: disallow the host for a day
+        return result  # 5xx, 429, timeout, refused or unsafe: disallow the host for a day
 
 
 def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> float:
