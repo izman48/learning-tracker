@@ -1,8 +1,8 @@
 """The `lt` command, and the startup guard every entrypoint calls.
 
-    lt check-config web|worker|fetcher   print effective settings, secrets masked
-
-Later tickets add admin subcommands here.
+lt check-config web|worker|fetcher   print effective settings, secrets masked
+lt create-admin --email EMAIL        make the first admin (password asked twice)
+lt admin grant|revoke --email EMAIL  give or take admin rights
 """
 
 import argparse
@@ -11,6 +11,7 @@ import os
 import sys
 from collections.abc import Sequence
 from datetime import time
+from getpass import getpass
 
 from learning_tracker.config import SETTINGS, ConfigError, Settings, load_settings
 from learning_tracker.config.catalogue import SERVICES
@@ -59,9 +60,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check-config", help="print effective settings, secrets masked")
     check.add_argument("service", choices=SERVICES)
+    create = commands.add_parser("create-admin", help="create an admin account")
+    create.add_argument("--email", required=True)
+    admin = commands.add_parser("admin", help="grant or revoke admin rights")
+    admin.add_argument("action", choices=("grant", "revoke"))
+    admin.add_argument("--email", required=True)
     args = parser.parse_args(argv)
     if args.command == "check-config":
         print(render(require_settings(args.service)))
+        return 0
+    return _admin_command(args)
+
+
+def _admin_command(args: argparse.Namespace) -> int:
+    # Imported here so `lt check-config` works without the database stack.
+    from learning_tracker.admin_cli import AdminError, create_admin, set_admin
+
+    settings = require_settings("web")
+    url = settings.database_url.reveal() if settings.database_url else ""
+    try:
+        if args.command == "create-admin":
+            # Never from argv: arguments show up in shell history and process lists.
+            password = getpass("New admin password: ")
+            if getpass("Repeat it: ") != password:
+                print("The passwords don't match.", file=sys.stderr)
+                return 1
+            create_admin(url, args.email, password)
+            print("Admin account created.")
+        else:
+            set_admin(url, args.email, admin=args.action == "grant")
+            print(f"Admin rights {'granted' if args.action == 'grant' else 'revoked'}.")
+    except AdminError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     return 0
 
 
