@@ -12,6 +12,7 @@
   of one candidate and a rate limit or outage as a failure of the source.
 """
 
+import re
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ import httpx2
 from pydantic import BaseModel, ValidationError
 
 API_BASE_URL = "https://api.anthropic.com"
+_LABEL = re.compile(r"[a-z][a-z0-9_-]{0,31}")  # labels sit inside the fence's start tag
 REQUEST_TIMEOUT_S = 60.0
 
 
@@ -139,7 +141,9 @@ class AnthropicModelClient:
     def render(data: Sequence[UntrustedBlock], *, tag: str) -> str:
         parts = []
         for block in data:
-            if tag in block.text or tag in block.label:
+            if not _LABEL.fullmatch(block.label):
+                raise ValueError("block label must be lowercase letters, digits, _ or -")
+            if tag in block.text:
                 raise ValueError("untrusted text contains the delimiter")
             parts.append(f'<{tag} label="{block.label}">\n{block.text}\n</{tag}>')
         return "\n".join(parts)

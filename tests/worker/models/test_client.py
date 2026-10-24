@@ -233,3 +233,10 @@ async def test_a_redirect_is_never_followed_so_the_key_cannot_be_forwarded() -> 
     with pytest.raises(ModelBadRequest):
         await call(client)
     assert [r.url.host for r in seen] == ["api.anthropic.com"]
+
+
+@pytest.mark.parametrize("label", ['page" x="y', "page>", "Page", "", "a" * 33, "page\n"])
+def test_block_labels_are_allow_listed_so_they_cannot_break_the_fence(label: str) -> None:
+    assert AnthropicModelClient.render([UntrustedBlock("hn-comments_2", "x")], tag="untrusted-a")
+    with pytest.raises(ValueError, match="label"):
+        AnthropicModelClient.render([UntrustedBlock(label, "x")], tag="untrusted-a")
