@@ -124,11 +124,12 @@ def check_run_commands(name: str, doc: dict[Any, Any]) -> list[str]:
         command = str(step.get("run", ""))
         if NPM_INSTALL.search(command) and "--ignore-scripts" not in command:
             problems.append(f"job {job_name}: npm install/ci must use --ignore-scripts")
-        if DOCKER_RUN.search(command):
-            # The image must come from the step's IMAGE env, pinned by digest, so the
-            # check is about the image that runs, not any digest-looking text.
+        runs = len(DOCKER_RUN.findall(command))
+        if runs:
+            # Every docker run must take its image from the step's IMAGE env, pinned
+            # by digest, so the check is about the image that runs, not any text.
             image = str((step.get("env") or {}).get("IMAGE", ""))
-            if '"$IMAGE"' not in command or not IMAGE_PIN.match(image):
+            if command.count('"$IMAGE"') < runs or not IMAGE_PIN.match(image):
                 problems.append(
                     f'job {job_name}: docker run must use "$IMAGE" from env, pinned by digest'
                 )

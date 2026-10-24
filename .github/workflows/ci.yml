@@ -70,8 +70,7 @@ jobs:
             -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
             "$IMAGE" git /repo --log-opts=--all --redact --no-banner --no-color --exit-code 1 2>&1 \
             | tee "$RUNNER_TEMP/gitleaks.log"
-          uv run --no-project python -m tools.gitleaks_guard "$RUNNER_TEMP/gitleaks.log" \
-            "$(git rev-list --all --count)"
+          uv run --no-project python -m tools.gitleaks_guard "$RUNNER_TEMP/gitleaks.log"
 
   required:
     if: always()

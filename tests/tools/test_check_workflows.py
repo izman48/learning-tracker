@@ -234,3 +234,15 @@ def test_service_and_container_images_must_be_pinned_by_digest(image: str) -> No
     doc["jobs"]["api"]["services"] = {"postgres": {"image": image}}
 
     assert any("digest" in p for p in check_workflow("ci.yml", doc))
+
+
+def test_a_second_unpinned_docker_run_in_the_same_step_fails() -> None:
+    doc = workflow()
+    steps(doc).append(
+        {
+            "env": {"IMAGE": "example/tool:1.0@sha256:" + "a" * 64},
+            "run": 'docker run --rm "$IMAGE" scan\ndocker run --rm example/other:2 go',
+        }
+    )
+
+    assert any("digest" in p for p in check_workflow("ci.yml", doc))
