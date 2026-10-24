@@ -1,12 +1,13 @@
 """Our own auth routes. Request bodies accept only the fields listed here."""
 
 import logging
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from learning_tracker.db.models import User
+from learning_tracker.db.models import PasswordChangeSource, User
 from learning_tracker.web.auth.deps import (
     DB,
     current_user,
@@ -14,7 +15,7 @@ from learning_tracker.web.auth.deps import (
     user_manager,
 )
 from learning_tracker.web.auth.manager import UserManager
-from learning_tracker.web.auth.passwords import MAX_PASSWORD
+from learning_tracker.web.auth.passwords import MAX_PASSWORD, MIN_PASSWORD
 from learning_tracker.web.auth.sessions import COOKIE_NAME, SessionStore, cookie_transport
 
 log = logging.getLogger("learning_tracker.auth")
@@ -30,6 +31,11 @@ class Strict(BaseModel):
 class LoginIn(Strict):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=MAX_PASSWORD)
+
+
+class PasswordChangeIn(Strict):
+    current_password: str = Field(min_length=1, max_length=MAX_PASSWORD)
+    new_password: str = Field(min_length=MIN_PASSWORD, max_length=MAX_PASSWORD)
 
 
 class MeOut(BaseModel):
@@ -79,3 +85,30 @@ async def me(user: CurrentUser) -> MeOut:
         is_admin=user.is_superuser,
         email_confirmed=user.email_confirmed_at is not None,
     )
+
+
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    body: PasswordChangeIn,
+    db: DB,
+    user: CurrentUser,
+    manager: Manager,
+    sessions: Sessions,
+) -> Response:
+    if not manager.check_password(user, body.current_password):
+        log.info("auth.password_change_failed user_id=%s", user.id)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is wrong")
+    await manager.user_db.update(
+        user,
+        {
+            "hashed_password": manager.password_helper.hash(body.new_password),
+            "password_changed_at": datetime.now(UTC),
+            "password_changed_via": PasswordChangeSource.USER,
+        },
+    )
+    # Every session ends, this device's too, and this device gets a fresh one, so
+    # a cookie captured before the change stops working. One transaction.
+    token = await sessions.restart_after_password_change(user.id)
+    await db.commit()
+    log.info("auth.password_changed user_id=%s", user.id)
+    return await cookie_transport(sessions.lifetime).get_login_response(token)

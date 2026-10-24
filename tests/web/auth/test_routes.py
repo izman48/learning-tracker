@@ -127,6 +127,61 @@ def test_sign_out_ends_the_session_and_clears_the_device(
     assert session_rows(client) == 0  # committed, read back through a fresh connection
 
 
+def test_change_password_needs_the_current_one(client: TestClient, add_user: AddUser) -> None:
+    add_user()
+    login(client, "reader@example.com")
+
+    response = client.post(
+        "/api/me/password",
+        json={"current_password": "wrong one", "new_password": "a brand new passphrase"},
+    )
+
+    assert response.status_code == 400
+    assert login(client, "reader@example.com").status_code == 204  # old password still works
+
+
+def test_change_password_ends_other_sessions_and_rotates_this_one(
+    config: WebConfig, client: TestClient, add_user: AddUser
+) -> None:
+    add_user()
+    with TestClient(create_app(config), base_url="https://testserver") as phone:
+        login(phone, "reader@example.com")
+        login(client, "reader@example.com")
+        before = client.cookies[COOKIE_NAME]
+
+        response = client.post(
+            "/api/me/password",
+            json={"current_password": PASSWORD, "new_password": "a brand new passphrase"},
+        )
+
+        assert response.status_code == 204
+        assert client.get("/api/me").status_code == 200  # this device stays signed in
+        assert phone.get("/api/me").status_code == 401  # every other session ended
+        after = client.cookies[COOKIE_NAME]
+        assert after != before
+        assert me_with_cookie(client, before) == 401  # a captured old cookie is dead
+        assert session_rows(client) == 1
+    assert login(client, "reader@example.com", "a brand new passphrase").status_code == 204
+    assert login(client, "reader@example.com").status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("password", "ok"),
+    [("x" * 9, False), ("x" * 10, True), ("x" * 128, True), ("x" * 129, False)],
+)
+def test_new_password_must_be_10_to_128_characters(
+    client: TestClient, add_user: AddUser, password: str, ok: bool
+) -> None:
+    add_user()
+    login(client, "reader@example.com")
+
+    response = client.post(
+        "/api/me/password", json={"current_password": PASSWORD, "new_password": password}
+    )
+
+    assert response.status_code == (204 if ok else 422)
+
+
 def test_oversized_login_password_is_refused_before_hashing(client: TestClient) -> None:
     response = login(client, "reader@example.com", "x" * 129)
 
@@ -162,11 +217,15 @@ def test_auth_logs_hold_no_email_password_or_token(
     login(client, "reader@example.com", "not the password")
     login(client, "reader@example.com")
     token = client.cookies[COOKIE_NAME]
+    client.post(
+        "/api/me/password",
+        json={"current_password": PASSWORD, "new_password": "a brand new passphrase"},
+    )
     client.post("/api/auth/logout")
 
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert "auth.login_failed" in logged and "auth.login" in logged  # precondition
-    for secret in ("reader@example.com", PASSWORD, "not the password", token):
+    for secret in ("reader@example.com", PASSWORD, "not the password", "brand new", token):
         assert secret not in logged
 
 
@@ -188,3 +247,25 @@ def test_validation_errors_never_echo_what_was_submitted(
     assert errors and all("loc" in e and "msg" in e for e in errors)  # precondition
     assert "hunter-two-secret" not in response.text and "p" * 129 not in response.text
     assert all("input" not in e and "ctx" not in e for e in errors)
+
+
+def test_change_password_records_when_and_how(client: TestClient, add_user: AddUser) -> None:
+    from sqlalchemy import create_engine, select
+
+    from learning_tracker.db.models import User
+
+    add_user()
+    login(client, "reader@example.com")
+    client.post(
+        "/api/me/password",
+        json={"current_password": PASSWORD, "new_password": "a brand new passphrase"},
+    )
+
+    engine = create_engine(client.app.state.config.database_url)  # type: ignore[attr-defined]
+    with engine.connect() as conn:
+        changed_at, via = conn.execute(
+            select(User.password_changed_at, User.password_changed_via)
+        ).one()
+    engine.dispose()
+    assert changed_at is not None
+    assert via == "user"
