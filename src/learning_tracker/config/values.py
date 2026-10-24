@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from learning_tracker.keys import MIN_SECRET_BYTES, Keys, derive_keys
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1")
+MIN_DISTINCT_BYTES = 16
 
 
 class Secret:
@@ -90,6 +91,9 @@ def secret_key(raw: str) -> Keys:
         raise ValueError("must be base64 (openssl rand -base64 48)") from None
     if len(decoded) < MIN_SECRET_BYTES:
         raise ValueError(f"must decode to at least {MIN_SECRET_BYTES} bytes")
+    # 32 random bytes hold about 30 distinct values; a typed or repeated key holds few.
+    if len(set(decoded)) < MIN_DISTINCT_BYTES:
+        raise ValueError("has too little randomness; generate one with openssl rand -base64 48")
     return derive_keys(decoded)
 
 
@@ -115,7 +119,16 @@ def origin(raw: str) -> str:
         raise ValueError("must be an origin only: scheme, host and optional port")
     if parts.scheme == "http" and parts.hostname not in LOCAL_HOSTS:
         raise ValueError("must use https:// unless the host is localhost or 127.0.0.1")
-    return raw.rstrip("/")
+    try:
+        port = parts.port
+    except ValueError:
+        raise ValueError("has an invalid port") from None
+    if port == 0:
+        raise ValueError("has an invalid port")
+    # Normalised the way browsers send Origin, because the CSRF check compares exactly.
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    default = {"http": 80, "https": 443}[parts.scheme]
+    return f"{parts.scheme}://{host}" + (f":{port}" if port not in (None, default) else "")
 
 
 def ip(raw: str) -> str:
