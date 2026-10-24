@@ -47,6 +47,8 @@ class Usage:
     input_tokens: int
     output_tokens: int
     web_search_requests: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -219,8 +221,13 @@ class AnthropicModelClient:
 
 def _usage(usage: anthropic.types.Usage) -> Usage:
     tool_use = getattr(usage, "server_tool_use", None)
-    searches = getattr(tool_use, "web_search_requests", 0) or 0
-    return Usage(usage.input_tokens, usage.output_tokens, searches)
+    return Usage(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        web_search_requests=getattr(tool_use, "web_search_requests", 0) or 0,
+        cache_read_input_tokens=usage.cache_read_input_tokens or 0,
+        cache_creation_input_tokens=usage.cache_creation_input_tokens or 0,
+    )
 
 
 def _typed(exc: anthropic.APIError) -> ModelError:

@@ -263,3 +263,14 @@ async def test_without_capability_data_neither_setting_is_sent() -> None:
     await call(client)
     body = json.loads(seen[0].content)
     assert "thinking" not in body and "effort" not in body["output_config"]
+
+
+async def test_usage_carries_cache_token_counts_for_spend_accounting() -> None:
+    usage = {"input_tokens": 100, "output_tokens": 9,
+             "cache_read_input_tokens": 400, "cache_creation_input_tokens": 50}  # fmt: skip
+    client, _ = client_with(replying(200, message(usage=usage)))
+    result = await call(client)
+    assert (result.usage.cache_read_input_tokens, result.usage.cache_creation_input_tokens) == (
+        400,
+        50,
+    )
