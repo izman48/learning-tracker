@@ -24,6 +24,7 @@ from learning_tracker.worker.models.client import (
     ModelUnavailable,
     Step,
     UntrustedBlock,
+    make_sdk_client,
 )
 
 pytestmark = pytest.mark.anyio
@@ -65,8 +66,7 @@ def client_with(handler: Handler) -> tuple[AnthropicModelClient, list[httpx2.Req
         seen.append(request)
         return handler(request)
 
-    http = httpx2.AsyncClient(transport=httpx2.MockTransport(record))
-    return AnthropicModelClient(api_key="test-key-not-real", http_client=http), seen
+    return AnthropicModelClient("test-key-not-real", transport=httpx2.MockTransport(record)), seen
 
 
 def replying(status: int, body: dict[str, Any], headers: dict[str, str] | None = None) -> Handler:
@@ -208,3 +208,28 @@ def test_the_interface_has_no_way_to_pass_tools() -> None:
     params = inspect.signature(ModelClient.complete_json).parameters
     assert "tools" not in params and "tool_choice" not in params
     assert set(params) == {"self", "step", "model", "system", "data", "schema", "max_output_tokens"}
+
+
+def test_proxy_settings_in_the_environment_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://proxy.example.com:3128")
+    http = make_sdk_client("test-key-not-real")._client  # the SDK's underlying httpx2 client
+    pools = [
+        type(getattr(t, "_pool", None)).__name__ for t in [http._transport, *http._mounts.values()]
+    ]
+    assert http.trust_env is False
+    assert pools == ["AsyncConnectionPool"]  # one direct pool, no proxy transports
+
+
+async def test_a_redirect_is_never_followed_so_the_key_cannot_be_forwarded() -> None:
+    def redirect(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "api.anthropic.com":
+            return httpx2.Response(
+                307, headers={"location": "https://elsewhere.example.com/v1/messages"}
+            )
+        return httpx2.Response(200, json=message())
+
+    client, seen = client_with(redirect)
+    with pytest.raises(ModelBadRequest):
+        await call(client)
+    assert [r.url.host for r in seen] == ["api.anthropic.com"]

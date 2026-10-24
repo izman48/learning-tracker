@@ -103,17 +103,37 @@ class ModelClient(Protocol):
     ) -> ModelResult[T]: ...
 
 
+def make_sdk_client(
+    api_key: str, *, transport: httpx2.AsyncBaseTransport | None = None
+) -> anthropic.AsyncAnthropic:
+    """The SDK client every worker call uses. Nothing in the environment can change
+    where the key goes:
+    - key and base URL are explicit (ANTHROPIC_BASE_URL and other credentials ignored);
+    - the HTTP client ignores proxy settings (the SDK's default client mounts
+      HTTP(S)_PROXY even with trust_env off, so we build our own);
+    - redirects are never followed, because httpx forwards custom headers such as
+      x-api-key to the new host;
+    - the SDK never retries on its own (every attempt is reserved by the caller).
+    `transport` exists for tests.
+    """
+    http = httpx2.AsyncClient(
+        transport=transport,
+        trust_env=False,
+        follow_redirects=False,
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    return anthropic.AsyncAnthropic(
+        api_key=api_key,
+        base_url=API_BASE_URL,
+        max_retries=0,
+        timeout=REQUEST_TIMEOUT_S,
+        http_client=http,
+    )
+
+
 class AnthropicModelClient:
-    def __init__(self, api_key: str, *, http_client: httpx2.AsyncClient | None = None) -> None:
-        # Key and base URL are explicit, so no credential or ANTHROPIC_BASE_URL in the
-        # environment can change where the key is sent.
-        self._client = anthropic.AsyncAnthropic(
-            api_key=api_key,
-            base_url=API_BASE_URL,
-            max_retries=0,
-            timeout=REQUEST_TIMEOUT_S,
-            http_client=http_client,
-        )
+    def __init__(self, api_key: str, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
+        self._client = make_sdk_client(api_key, transport=transport)
 
     @staticmethod
     def render(data: Sequence[UntrustedBlock], *, tag: str) -> str:
