@@ -3,10 +3,24 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from learning_tracker.db.engine import make_engine, make_session_factory
+from learning_tracker.web.auth.routes import router as auth_router
 from learning_tracker.web.config import WebConfig
+
+
+async def validation_error(_request: Request, exc: Exception) -> JSONResponse:
+    """422 without echoing what was submitted.
+
+    FastAPI's default body includes each error's `input` (and `ctx`), which would
+    send a rejected password back to the client and into any proxy or client log.
+    """
+    errors = exc.errors() if isinstance(exc, RequestValidationError) else []
+    detail = [{"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]} for e in errors]
+    return JSONResponse({"detail": detail}, status_code=422)
 
 
 def create_app(config: WebConfig) -> FastAPI:
@@ -20,6 +34,8 @@ def create_app(config: WebConfig) -> FastAPI:
     # No published API docs: the API is for our own PWA, not a public surface.
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.config = config
+    app.add_exception_handler(RequestValidationError, validation_error)
+    app.include_router(auth_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
