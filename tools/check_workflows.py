@@ -18,7 +18,12 @@ SHA_PIN = re.compile(r"^[\w.-]+/[\w.-]+(/[\w./-]+)?@[0-9a-f]{40}$")
 DOCKER_PIN = re.compile(r"^docker://\S+@sha256:[0-9a-f]{64}$")
 NPM_INSTALL = re.compile(r"\bnpm\s+(ci|install|i)\b")
 DOCKER_RUN = re.compile(r"\bdocker\s+run\b")
-FORBIDDEN_TRIGGERS = ("pull_request_target", "workflow_run")
+IMAGE_PIN = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
+# Allow-lists, not deny-lists: anything new needs a deliberate edit here.
+ALLOWED_TRIGGERS = {"pull_request", "push", "schedule", "workflow_dispatch"}
+READ_ONLY = {"read", "none"}
+# (workflow file, job, permission) that may be granted write.
+ALLOWED_JOB_WRITES = {("codeql.yml", "analyze", "security-events")}
 CACHE_ACTIONS = ("actions/cache@", "actions/cache/save@")
 
 
@@ -42,7 +47,7 @@ def all_steps(doc: dict[Any, Any]) -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
-def check_pins(doc: dict[Any, Any]) -> list[str]:
+def check_pins(name: str, doc: dict[Any, Any]) -> list[str]:
     problems = []
     refs = [(name, step.get("uses")) for name, step in all_steps(doc)]
     refs += [(name, job.get("uses")) for name, job in (doc.get("jobs") or {}).items()]
@@ -55,20 +60,33 @@ def check_pins(doc: dict[Any, Any]) -> list[str]:
     return problems
 
 
-def check_triggers(doc: dict[Any, Any]) -> list[str]:
-    return [f"trigger {t} is not allowed" for t in FORBIDDEN_TRIGGERS if t in triggers(doc)]
+def check_triggers(name: str, doc: dict[Any, Any]) -> list[str]:
+    return [f"trigger {t} is not allowed" for t in sorted(triggers(doc) - ALLOWED_TRIGGERS)]
 
 
-def check_permissions(doc: dict[Any, Any]) -> list[str]:
-    permissions = doc.get("permissions")
-    if permissions is None:
-        return ["top-level permissions block is missing"]
-    if permissions == "write-all":
-        return ["top-level permissions must not be write-all"]
+def write_grants(permissions: Any) -> list[str]:
+    if isinstance(permissions, str):
+        return [] if permissions in ("read-all", "{}") else [permissions]
+    if isinstance(permissions, dict):
+        return [scope for scope, level in permissions.items() if level not in READ_ONLY]
     return []
 
 
-def check_checkout(doc: dict[Any, Any]) -> list[str]:
+def check_permissions(name: str, doc: dict[Any, Any]) -> list[str]:
+    permissions = doc.get("permissions")
+    if permissions is None:
+        return ["top-level permissions block is missing"]
+    problems = [
+        f"top-level permissions must be read-only, not {g}" for g in write_grants(permissions)
+    ]
+    for job_name, job in (doc.get("jobs") or {}).items():
+        for scope in write_grants(job.get("permissions")):
+            if (name, job_name, scope) not in ALLOWED_JOB_WRITES:
+                problems.append(f"job {job_name}: permissions {scope}: write is not allow-listed")
+    return problems
+
+
+def check_checkout(name: str, doc: dict[Any, Any]) -> list[str]:
     return [
         f"job {job_name}: actions/checkout must set persist-credentials: false"
         for job_name, step in all_steps(doc)
@@ -89,7 +107,7 @@ def writes_cache(step: dict[str, Any]) -> bool:
     return False
 
 
-def check_cache(doc: dict[Any, Any]) -> list[str]:
+def check_cache(name: str, doc: dict[Any, Any]) -> list[str]:
     # A fork PR that can write a cache entry can poison what main later restores.
     if "pull_request" not in triggers(doc):
         return []
@@ -100,22 +118,41 @@ def check_cache(doc: dict[Any, Any]) -> list[str]:
     ]
 
 
-def check_run_commands(doc: dict[Any, Any]) -> list[str]:
+def check_run_commands(name: str, doc: dict[Any, Any]) -> list[str]:
     problems = []
     for job_name, step in all_steps(doc):
         command = str(step.get("run", ""))
         if NPM_INSTALL.search(command) and "--ignore-scripts" not in command:
             problems.append(f"job {job_name}: npm install/ci must use --ignore-scripts")
-        if DOCKER_RUN.search(command) and "@sha256:" not in command:
-            problems.append(f"job {job_name}: docker run images must be pinned by digest")
+        if DOCKER_RUN.search(command):
+            # The image must come from the step's IMAGE env, pinned by digest, so the
+            # check is about the image that runs, not any digest-looking text.
+            image = str((step.get("env") or {}).get("IMAGE", ""))
+            if '"$IMAGE"' not in command or not IMAGE_PIN.match(image):
+                problems.append(
+                    f'job {job_name}: docker run must use "$IMAGE" from env, pinned by digest'
+                )
     return problems
 
 
-def check_required(doc: dict[Any, Any]) -> list[str]:
+def check_job_images(name: str, doc: dict[Any, Any]) -> list[str]:
+    problems = []
+    for job_name, job in (doc.get("jobs") or {}).items():
+        images = [service.get("image", "") for service in (job.get("services") or {}).values()]
+        container = job.get("container")
+        images.append(container.get("image", "") if isinstance(container, dict) else container)
+        for image in filter(None, images):
+            if not IMAGE_PIN.match(str(image)):
+                problems.append(f"job {job_name}: image {image} must be pinned by digest")
+    return problems
+
+
+def check_required(name: str, doc: dict[Any, Any]) -> list[str]:
     jobs = doc.get("jobs") or {}
     required = jobs.get("required")
     if required is None:
-        return []
+        # ci.yml's required job is the one status branch policy relies on.
+        return ["ci.yml must keep its required job"] if name == "ci.yml" else []
     problems = []
     if "always()" not in str(required.get("if", "")):
         problems.append("job required must run with if: always()")
@@ -132,12 +169,13 @@ RULES = (
     check_checkout,
     check_cache,
     check_run_commands,
+    check_job_images,
     check_required,
 )
 
 
 def check_workflow(name: str, doc: dict[Any, Any]) -> list[str]:
-    return [f"{name}: {problem}" for rule in RULES for problem in rule(doc)]
+    return [f"{name}: {problem}" for rule in RULES for problem in rule(name, doc)]
 
 
 def check_repo(workflows_dir: Path) -> list[str]:

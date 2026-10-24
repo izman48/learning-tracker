@@ -162,3 +162,75 @@ def test_check_repo_parses_the_on_key(tmp_path: Path) -> None:
     )
 
     assert any("pull_request_target" in p for p in check_repo(tmp_path))
+
+
+@pytest.mark.parametrize("trigger", ["issue_comment", "pull_request_review", "repository_dispatch"])
+def test_triggers_outside_the_allow_list_fail(trigger: str) -> None:
+    doc = workflow({True: {trigger: None}})
+
+    assert any(trigger in p for p in check_workflow("ci.yml", doc))
+
+
+@pytest.mark.parametrize("permissions", [{"contents": "write"}, {"packages": "write"}])
+def test_top_level_write_permissions_fail(permissions: dict[str, str]) -> None:
+    doc = workflow({"permissions": permissions})
+
+    assert any("permissions" in p for p in check_workflow("ci.yml", doc))
+
+
+def test_job_write_permission_outside_the_allow_list_fails() -> None:
+    doc = workflow()
+    doc["jobs"]["api"]["permissions"] = {"contents": "write"}
+
+    assert any("contents: write" in p for p in check_workflow("ci.yml", doc))
+
+
+def test_allow_listed_job_write_permission_passes() -> None:
+    doc = workflow(
+        {
+            "jobs": {
+                "analyze": {
+                    "runs-on": "ubuntu-24.04",
+                    "permissions": {"contents": "read", "security-events": "write"},
+                    "steps": [{"run": "true"}],
+                }
+            }
+        }
+    )
+
+    assert check_workflow("codeql.yml", doc) == []
+
+
+def test_ci_without_a_required_job_fails() -> None:
+    doc = workflow()
+    del doc["jobs"]["required"]
+
+    assert any("required" in p for p in check_workflow("ci.yml", doc))
+
+
+def test_docker_run_must_use_a_digest_pinned_image_variable() -> None:
+    doc = workflow()
+    # A digest elsewhere in the command does not pin the image that runs.
+    steps(doc).append({"run": "docker run --rm example/tool:1.0 --label x@sha256:" + "a" * 64})
+
+    assert any("digest" in p for p in check_workflow("ci.yml", doc))
+
+
+def test_docker_run_with_a_pinned_image_env_passes() -> None:
+    doc = workflow()
+    steps(doc).append(
+        {
+            "env": {"IMAGE": "example/tool:1.0@sha256:" + "a" * 64},
+            "run": 'docker run --rm "$IMAGE" scan',
+        }
+    )
+
+    assert check_workflow("ci.yml", doc) == []
+
+
+@pytest.mark.parametrize("image", ["postgres:18.6-alpine", "postgres@sha256:abc"])
+def test_service_and_container_images_must_be_pinned_by_digest(image: str) -> None:
+    doc = workflow()
+    doc["jobs"]["api"]["services"] = {"postgres": {"image": image}}
+
+    assert any("digest" in p for p in check_workflow("ci.yml", doc))
