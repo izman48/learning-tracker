@@ -9,11 +9,15 @@
 Each layer is tested on its own, so neither silently depends on the other.
 """
 
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, Protocol
 
 import aiohttp
+from aiohttp.abc import AbstractResolver
 
+from learning_tracker.fetcher.addresses import is_public_address
+from learning_tracker.fetcher.resolver import safe_connector
 from learning_tracker.fetcher.urls import TargetURL, validate_url
 
 
@@ -49,4 +53,33 @@ def guarded_session(
 ) -> aiohttp.ClientSession:
     return aiohttp.ClientSession(
         connector=connector, trace_configs=[url_guard(check_url)], **kwargs
+    )
+
+
+# Per-step limits; the whole fetch, across redirects and the body, has its own deadline.
+CONNECT_TIMEOUT_S = 5
+READ_TIMEOUT_S = 10
+
+
+def fetcher_session(
+    contact_url: str,
+    *,
+    resolver: AbstractResolver | None = None,
+    is_allowed: Callable[[str], bool] = is_public_address,
+) -> aiohttp.ClientSession:
+    """The one session the fetcher uses: both guards, no cookies, no proxy settings
+    from the environment, no credentials, and an honest User-Agent."""
+    return guarded_session(
+        connector=safe_connector(resolver, is_allowed=is_allowed),
+        cookie_jar=aiohttp.DummyCookieJar(),
+        trust_env=False,
+        timeout=aiohttp.ClientTimeout(
+            total=None, sock_connect=CONNECT_TIMEOUT_S, sock_read=READ_TIMEOUT_S
+        ),
+        headers={
+            "User-Agent": f"Mozilla/5.0 (compatible; learning-tracker; +{contact_url})",
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+            "Accept-Language": "en",
+            "Accept-Encoding": "gzip, deflate",
+        },
     )
