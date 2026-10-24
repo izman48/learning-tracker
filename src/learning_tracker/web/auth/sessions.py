@@ -4,6 +4,9 @@ The cookie carries 32 random bytes (base64url). The database stores only
 HMAC-SHA256(session subkey, token), so reading the sessions table yields nothing a
 browser can present, and a token is useless under a different LT_SECRET_KEY.
 fastapi-users' own DatabaseStrategy stores the raw token, which is why this exists.
+
+The store never commits: the caller owns the transaction, so a route's changes and
+its session changes land together or not at all.
 """
 
 import hashlib
@@ -48,14 +51,22 @@ class SessionStore:
         return hmac.new(self._key, token.encode(), hashlib.sha256).digest()
 
     async def issue(self, user_id: uuid.UUID, *, replacing: str | None = None) -> str:
-        """Start a session. `replacing` is the cookie the browser presented, if any:
-        it is ended first, so signing in always rotates the session id."""
+        """Start a session. `replacing` is the cookie the browser presented, if any.
+        It is ended first, whoever it belongs to (a shared browser), so signing in
+        always rotates the session id."""
         if replacing is not None and _TOKEN_SHAPE.fullmatch(replacing):
-            await self.db.execute(
-                delete(Session).where(
-                    Session.token_hash == self.hash(replacing), Session.user_id == user_id
-                )
-            )
+            await self.db.execute(delete(Session).where(Session.token_hash == self.hash(replacing)))
+        return await self._new(user_id)
+
+    async def restart_after_password_change(self, user_id: uuid.UUID) -> str:
+        """End every session of the user, this device's too, and start a fresh one.
+
+        A cookie captured before the change must not survive it. Both happen in the
+        caller's transaction, so a failed change leaves the old sessions intact."""
+        await self.db.execute(delete(Session).where(Session.user_id == user_id))
+        return await self._new(user_id)
+
+    async def _new(self, user_id: uuid.UUID) -> str:
         token = secrets.token_urlsafe(32)
         self.db.add(
             Session(
@@ -64,7 +75,7 @@ class SessionStore:
                 expires_at=datetime.now(UTC) + self.lifetime,
             )
         )
-        await self.db.commit()
+        await self.db.flush()
         return token
 
     async def user_id_for(self, token: str | None) -> uuid.UUID | None:
@@ -85,23 +96,13 @@ class SessionStore:
     async def revoke(self, token: str) -> None:
         if _TOKEN_SHAPE.fullmatch(token):
             await self.db.execute(delete(Session).where(Session.token_hash == self.hash(token)))
-            await self.db.commit()
-
-    async def revoke_others(self, user_id: uuid.UUID, *, keep: str) -> None:
-        """After a password change: end every session of the user except this one."""
-        await self.db.execute(
-            delete(Session).where(Session.user_id == user_id, Session.token_hash != self.hash(keep))
-        )
-        await self.db.commit()
 
     async def revoke_all(self, user_id: uuid.UUID) -> None:
         await self.db.execute(delete(Session).where(Session.user_id == user_id))
-        await self.db.commit()
 
     async def purge_expired(self) -> int:
         result = cast(
             CursorResult[Any],
             await self.db.execute(delete(Session).where(Session.expires_at <= datetime.now(UTC))),
         )
-        await self.db.commit()
         return result.rowcount
