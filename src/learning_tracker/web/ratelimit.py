@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-TOO_MANY = "Too many tries. Try again in a few minutes."
+TOO_MANY = "Too many tries. Wait a few minutes, then try again."  # spec AUTH-5/9
 
 _HIT = text(
     """

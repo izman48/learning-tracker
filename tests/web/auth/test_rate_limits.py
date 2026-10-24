@@ -56,7 +56,7 @@ def test_per_ip_limit_is_5_a_minute_with_retry_after(
 
     assert response.status_code == 429
     assert 0 < int(response.headers["retry-after"]) <= 60
-    assert response.json() == {"detail": "Too many tries. Try again in a few minutes."}
+    assert response.json() == {"detail": "Too many tries. Wait a few minutes, then try again."}
 
 
 def test_another_ip_has_its_own_budget(from_ip: Callable[[str], TestClient]) -> None:
