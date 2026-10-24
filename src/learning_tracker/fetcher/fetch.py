@@ -30,6 +30,23 @@ ARTICLE_TYPES = ("text/html", "application/xhtml+xml")
 _REDIRECTS = (301, 302, 303, 307, 308)
 
 
+@dataclass(frozen=True)
+class BodyRule:
+    """Which content types are read, and up to how many decompressed bytes.
+    An entry ending in "/" matches every subtype ("text/")."""
+
+    types: tuple[str, ...]
+    max_bytes: int
+
+    def accepts(self, content_type: str) -> bool:
+        return any(
+            content_type.startswith(t) if t.endswith("/") else content_type == t for t in self.types
+        )
+
+
+ARTICLE = BodyRule(ARTICLE_TYPES, MAX_BODY_BYTES)
+
+
 class Outcome(StrEnum):
     OK = "ok"
     DEAD = "dead"
@@ -53,11 +70,15 @@ class FetchResult:
 
 
 async def fetch_page(
-    session: aiohttp.ClientSession, url: str, *, deadline: float = FETCH_DEADLINE_S
+    session: aiohttp.ClientSession,
+    url: str,
+    *,
+    deadline: float = FETCH_DEADLINE_S,
+    body: BodyRule = ARTICLE,
 ) -> FetchResult:
     try:
         async with asyncio.timeout(deadline):
-            return await _follow(session, url)
+            return await _follow(session, url, body)
     except TimeoutError:
         return FetchResult(url, Outcome.TIMEOUT, "deadline")
     except UnsafeURL as exc:
@@ -67,12 +88,12 @@ async def fetch_page(
         return FetchResult(url, outcome, reason)
 
 
-async def _follow(session: aiohttp.ClientSession, url: str) -> FetchResult:
+async def _follow(session: aiohttp.ClientSession, url: str, rule: BodyRule) -> FetchResult:
     target = validate_url(url)
     for _ in range(MAX_REDIRECTS + 1):
         async with session.get(target.url, allow_redirects=False) as resp:
             if resp.status not in _REDIRECTS:
-                return await _final(url, target, resp)
+                return await _final(url, target, resp, rule)
             location = resp.headers.get("Location")
         if not location:
             return FetchResult(url, Outcome.DEAD, "redirect without location", resp.status)
@@ -87,7 +108,9 @@ def _next_hop(current: TargetURL, location: str) -> TargetURL:
     return hop
 
 
-async def _final(url: str, target: TargetURL, resp: aiohttp.ClientResponse) -> FetchResult:
+async def _final(
+    url: str, target: TargetURL, resp: aiohttp.ClientResponse, rule: BodyRule
+) -> FetchResult:
     content_type = resp.content_type.lower()
     seen = FetchResult(
         url,
@@ -106,9 +129,9 @@ async def _final(url: str, target: TargetURL, resp: aiohttp.ClientResponse) -> F
         return _with(seen, Outcome.DEAD, f"http {resp.status}")
     if content_type == "application/pdf":
         return _with(seen, Outcome.NOT_ARTICLE, "pdf")
-    if content_type not in ARTICLE_TYPES:
+    if not rule.accepts(content_type):
         return _with(seen, Outcome.NOT_ARTICLE, f"not html ({content_type or 'none'})")
-    body = await _read_capped(resp)
+    body = await _read_capped(resp, rule.max_bytes)
     if body is None:
         return _with(seen, Outcome.NOT_ARTICLE, "too large")
     return FetchResult(**{**seen.__dict__, "body": body})
@@ -122,11 +145,11 @@ def _blocked_reason(resp: aiohttp.ClientResponse) -> str:
     return ""
 
 
-async def _read_capped(resp: aiohttp.ClientResponse) -> bytes | None:
+async def _read_capped(resp: aiohttp.ClientResponse, max_bytes: int) -> bytes | None:
     chunks, size = [], 0
     async for chunk in resp.content.iter_chunked(64 * 1024):
         size += len(chunk)
-        if size > MAX_BODY_BYTES:
+        if size > max_bytes:
             return None
         chunks.append(chunk)
     return b"".join(chunks)
