@@ -36,7 +36,10 @@ HEADERS = {
     "cross-origin-resource-policy": "same-origin",
     "permissions-policy": PERMISSIONS,
 }
-HSTS = "max-age=63072000"  # two years; Caddy (or the self-hoster's proxy) terminates TLS
+# Two years; Caddy (or the self-hoster's proxy) terminates TLS. No includeSubDomains
+# and no preload, on purpose: an instance often runs on a subdomain it doesn't own the
+# parent of, and HSTS on the parent's other hosts is not ours to set.
+HSTS = "max-age=63072000"
 # Deny by default: every method except these must pass the CSRF check.
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -56,6 +59,14 @@ class SecurityMiddleware:
         self.public_origin = public_origin
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "websocket":
+            # Browsers send cookies on cross-site WebSocket handshakes and CORS does
+            # not apply, so a handshake must carry our own Origin (CSWSH).
+            if Headers(scope=scope).get("origin") != self.public_origin:
+                await send({"type": "websocket.close", "code": 1008})
+                return
+            await self.app(scope, receive, send)
+            return
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
