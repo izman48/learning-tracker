@@ -3,6 +3,7 @@
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tools.gitleaks_guard import expected_commits, problems
@@ -58,12 +59,46 @@ def test_expected_count_excludes_merge_commits(tmp_path: Path) -> None:
     git(tmp_path, "commit", "-q", "--allow-empty", "-m", "main")
     git(tmp_path, "merge", "-q", "--no-ff", "-m", "merge", "topic")
 
-    assert expected_commits(tmp_path) == 3
+    assert expected_commits(tmp_path, "all") == 3
 
 
-def test_ci_secrets_job_runs_the_guard() -> None:
-    ci = yaml.safe_load((REPO_ROOT / ".github/workflows/ci.yml").read_text())
-    commands = "\n".join(step.get("run", "") for step in ci["jobs"]["secrets"]["steps"])
+def test_head_scope_counts_only_the_checked_out_ancestry(tmp_path: Path) -> None:
+    # On a pull request, another branch's commits must not be expected (or scanned).
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "commit", "-q", "--allow-empty", "-m", "base")
+    git(tmp_path, "switch", "-q", "-c", "elsewhere")
+    git(tmp_path, "commit", "-q", "--allow-empty", "-m", "another branch")
+    git(tmp_path, "commit", "-q", "--allow-empty", "-m", "and another")
+    git(tmp_path, "switch", "-q", "main")
+    git(tmp_path, "commit", "-q", "--allow-empty", "-m", "the pr")
 
-    assert "gitleaks" in commands
-    assert "tools.gitleaks_guard" in commands
+    assert expected_commits(tmp_path, "head") == 2
+    assert expected_commits(tmp_path, "all") == 4
+
+
+def test_scope_must_be_known() -> None:
+    with pytest.raises(ValueError, match="scope"):
+        expected_commits(REPO_ROOT, "everything")
+
+
+def workflow_runs(name: str, job: str) -> str:
+    doc = yaml.safe_load((REPO_ROOT / ".github/workflows" / name).read_text())
+    return "\n".join(step.get("run", "") for step in doc["jobs"][job]["steps"])
+
+
+def test_pull_requests_scan_their_own_ancestry() -> None:
+    commands = workflow_runs("ci.yml", "secrets")
+
+    assert "gitleaks" in commands and "--log-opts=HEAD" in commands
+    assert "--log-opts=--all" not in commands
+    assert "tools.gitleaks_guard" in commands and "--scope head" in commands
+
+
+def test_main_and_the_weekly_run_sweep_every_branch() -> None:
+    doc = yaml.safe_load((REPO_ROOT / ".github/workflows/audit.yml").read_text())
+    triggers = doc.get("on", doc.get(True))
+    assert "schedule" in triggers and "push" in triggers  # precondition: when it runs
+    commands = workflow_runs("audit.yml", "secrets")
+
+    assert "--log-opts=--all" in commands
+    assert "tools.gitleaks_guard" in commands and "--scope all" in commands

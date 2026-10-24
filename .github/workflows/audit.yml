@@ -29,3 +29,31 @@ jobs:
         run: |
           uv export --format requirements-txt --no-emit-project -q > "$RUNNER_TEMP/requirements.txt"
           uv run pip-audit --strict --disable-pip -r "$RUNNER_TEMP/requirements.txt"
+
+  secrets:
+    # Every pushed branch is public, so main and the weekly run sweep all of them.
+    # Pull requests scan only their own ancestry (ci.yml), so a leak on another
+    # branch is caught here without failing unrelated PRs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Fetch every branch
+        run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.24"
+          enable-cache: false
+      - name: gitleaks over every branch
+        env:
+          IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/repo" --user "$(id -u):$(id -g)" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+            "$IMAGE" git /repo --log-opts=--all --redact --no-banner --no-color --exit-code 1 2>&1 \
+            | tee "$RUNNER_TEMP/gitleaks.log"
+          uv run --no-project python -m tools.gitleaks_guard "$RUNNER_TEMP/gitleaks.log" --scope all
