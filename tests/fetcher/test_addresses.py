@@ -99,6 +99,23 @@ def test_the_explicit_refusal_table_is_the_documented_one() -> None:
         "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
     }  # fmt: skip
     assert {str(n) for n in addresses._REFUSED_V6} == {
-        "::/96", "::1/128", "64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32",
+        "::/96", "::1/128", "::ffff:0:0:0/96", "64:ff9b::/96", "64:ff9b:1::/48", "2002::/16",
+        "2001::/23",
         "2001:db8::/32", "100::/64", "fc00::/7", "fe80::/10", "fec0::/10", "ff00::/8",
     }  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "ip",
+    [
+        "::ffff:0:7f00:1",  # IPv4-translated (SIIT) 127.0.0.1
+        "::ffff:0:a9fe:a9fe",  # IPv4-translated (SIIT) 169.254.169.254
+        "5f00::1",  # SRv6 SIDs, outside global unicast
+        "4000::1",  # unassigned, outside 2000::/3
+        "2001:20::1",  # ORCHIDv2, inside the IETF special-purpose block 2001::/23
+        "2001:10::1",  # deprecated ORCHID
+    ],
+)
+def test_ipv6_must_be_global_unicast_outside_special_purpose_blocks(ip: str) -> None:
+    assert is_public_address("2606:4700:4700::1111")  # control: global unicast
+    assert is_public_address(ip) is False

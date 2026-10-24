@@ -144,3 +144,19 @@ def test_a_redirect_location_is_resolved_against_the_current_url_then_checked() 
     assert str(t.url) == "https://example.com/next"
     with pytest.raises(UnsafeURL, match="port"):
         validate_url("//example.com:8080/x", base="https://example.com/")
+
+
+def test_host_labels_are_matched_whole_not_up_to_a_trailing_newline() -> None:
+    from learning_tracker.fetcher import urls
+
+    assert urls._check_host("example.com") == "example.com"  # control
+    with pytest.raises(UnsafeURL):
+        urls._check_host("example.com\n")
+    with pytest.raises(UnsafeURL):
+        urls._check_host("exa\nmple.com")
+
+
+def test_a_trailing_dot_is_stripped_from_host_and_url() -> None:
+    target = validate_url("https://example.com./x")
+    assert target.host == "example.com"
+    assert str(target.url) == "https://example.com/x"

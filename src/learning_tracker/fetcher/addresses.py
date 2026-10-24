@@ -29,17 +29,21 @@ _REFUSED_V4 = tuple(
     )
 )
 
-# NAT64, 6to4 and Teredo can carry an internal IPv4 address inside a public-looking
+# IPv6 must be global unicast (2000::/3); everything outside it is refused. Inside it,
+# SIIT, NAT64, 6to4 and Teredo can carry an internal IPv4 address in a public-looking
 # IPv6 one. No article needs them, so they are refused outright, not unwrapped.
+_GLOBAL_UNICAST_V6 = IPv6Network("2000::/3")
 _REFUSED_V6 = tuple(
     IPv6Network(net)
     for net in (
         "::/96",  # unspecified and the deprecated IPv4-compatible form
         "::1/128",
+        "::ffff:0:0:0/96",  # IPv4-translated (SIIT); not the mapped ::ffff:0:0/96
         "64:ff9b::/96",  # NAT64
         "64:ff9b:1::/48",  # NAT64, local use
         "2002::/16",  # 6to4
-        "2001::/32",  # Teredo
+        # IETF protocol assignments (Teredo, ORCHID, AMT, ...): no web content lives here.
+        "2001::/23",
         "2001:db8::/32",  # documentation
         "100::/64",  # discard-only
         "fc00::/7",  # unique local
@@ -65,5 +69,5 @@ def is_public_address(text: str) -> bool:
     if isinstance(addr, IPv4Address):
         refused = any(addr in net for net in _REFUSED_V4)
     else:
-        refused = any(addr in net for net in _REFUSED_V6)
+        refused = addr not in _GLOBAL_UNICAST_V6 or any(addr in net for net in _REFUSED_V6)
     return not refused and addr.is_global

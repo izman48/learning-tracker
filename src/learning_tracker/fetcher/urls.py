@@ -14,7 +14,7 @@ from yarl import URL
 MAX_URL_LENGTH = 2048
 MAX_HOST_LENGTH = 253
 _PORT_FOR_SCHEME = {"http": 80, "https": 443}
-_LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
+_LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)")  # used with fullmatch
 
 
 class UnsafeURL(ValueError):
@@ -46,9 +46,12 @@ def validate_url(raw: str, *, base: str | None = None) -> TargetURL:
         raise UnsafeURL("userinfo not allowed")
 
     host = _check_host(url.raw_host)
-    if url.port != _PORT_FOR_SCHEME[scheme]:
+    port = _PORT_FOR_SCHEME[scheme]
+    if url.port != port:
         raise UnsafeURL("port not allowed")
-    return TargetURL(url=url.with_fragment(None), scheme=scheme, host=host, port=url.port)
+    if host != url.raw_host:  # a trailing dot: many servers 404 or mis-certify example.com.
+        url = url.with_host(host)
+    return TargetURL(url=url.with_fragment(None), scheme=scheme, host=host, port=port)
 
 
 def _check_host(raw_host: str | None) -> str:
@@ -63,9 +66,9 @@ def _check_host(raw_host: str | None) -> str:
     labels = bare.split(".")
     if len(labels) < 2:
         raise UnsafeURL("single-label host")
-    if not all(_LABEL.match(label) for label in labels):
+    if not all(_LABEL.fullmatch(label) for label in labels):
         raise UnsafeURL("invalid host")
-    return host
+    return bare
 
 
 def _is_ip_literal(host: str) -> bool:
