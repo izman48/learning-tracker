@@ -182,3 +182,17 @@ def test_origin_refuses_invalid_ports(raw: str) -> None:
 def test_secret_key_refuses_trivially_low_entropy_keys(decoded: bytes) -> None:
     assert v.secret_key(base64.b64encode(bytes(range(48))).decode())  # precondition
     assert "too little randomness" in refuses(v.secret_key, base64.b64encode(decoded).decode())
+
+
+def test_postgres_url_requires_the_installed_psycopg3_driver() -> None:
+    assert v.postgres_url("postgresql+psycopg://lt:pw@db:5432/lt").reveal()  # precondition
+    for bare in ("postgresql://lt:pw@db:5432/lt", "postgres://lt:pw@db/lt"):
+        assert "postgresql+psycopg://" in refuses(v.postgres_url, bare)
+
+
+@pytest.mark.parametrize(
+    "raw", ["https://user:pw@example.com/repo", "https://user@example.com/repo"]
+)
+def test_https_url_refuses_userinfo(raw: str) -> None:
+    assert v.https_url("https://example.com/repo")  # precondition
+    refuses(v.https_url, raw)

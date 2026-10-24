@@ -102,7 +102,8 @@ def secret(raw: str) -> Secret:
 
 
 def postgres_url(raw: str) -> Secret:
-    if re.search(r"\s", raw) or not raw.startswith(("postgresql://", "postgresql+psycopg://")):
+    # Only the driver we install (psycopg 3); bare postgresql:// would pick psycopg2.
+    if re.search(r"\s", raw) or not raw.startswith("postgresql+psycopg://"):
         raise ValueError("must be a postgresql+psycopg:// URL")
     return Secret(raw)
 
@@ -171,6 +172,8 @@ def https_url(raw: str) -> str:
     parts = urlsplit(raw)
     if parts.scheme != "https" or not parts.hostname or re.search(r"\s", raw):
         raise ValueError("must be an https:// URL")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("must not contain a user name or password")
     return raw
 
 
