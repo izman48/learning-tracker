@@ -168,3 +168,23 @@ def test_auth_logs_hold_no_email_password_or_token(
     assert "auth.login_failed" in logged and "auth.login" in logged  # precondition
     for secret in ("reader@example.com", PASSWORD, "not the password", token):
         assert secret not in logged
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"email": "reader@example.com", "password": "p" * 129},  # too long
+        {"email": "r", "password": "hunter-two-secret"},  # bad email, password valid
+        {"email": "reader@example.com", "password": "hunter-two-secret", "is_superuser": True},
+    ],
+)
+def test_validation_errors_never_echo_what_was_submitted(
+    client: TestClient, body: dict[str, object]
+) -> None:
+    response = client.post("/api/auth/login", json=body)
+
+    assert response.status_code == 422
+    errors = response.json()["detail"]
+    assert errors and all("loc" in e and "msg" in e for e in errors)  # precondition
+    assert "hunter-two-secret" not in response.text and "p" * 129 not in response.text
+    assert all("input" not in e and "ctx" not in e for e in errors)
