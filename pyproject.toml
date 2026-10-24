@@ -6,7 +6,10 @@ readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.14,<3.15"
 dependencies = [
+    "alembic==1.20.0",
     "fastapi==0.143.0",
+    "psycopg[binary]==3.3.6",
+    "sqlalchemy[asyncio]==2.1.4",
     "uvicorn==0.54.0",
 ]
 
@@ -42,7 +45,7 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "SIM", "RUF"]
 known-first-party = ["learning_tracker", "tests", "tools"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S603", "S607"]  # tests may assert and call git
+"tests/**" = ["S101", "S105", "S106", "S603", "S607"]  # asserts, fake credentials, git calls
 
 [tool.mypy]
 python_version = "3.14"

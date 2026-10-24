@@ -18,6 +18,7 @@ Everything here is public from the first push. That includes code, tests, fixtur
 
 ```
 src/learning_tracker/
+  db/         SQLAlchemy models and Alembic migrations
   web/        FastAPI app (API + PWA files). Imports no outbound HTTP client
               (tests/web/test_web_imports.py).
   worker/     nightly pipeline, mail, model calls (later tickets)
@@ -30,12 +31,24 @@ tests/        mirrors src/; tests/repo/ holds repo-level checks
 
 ```bash
 uv sync --locked          # install exactly what uv.lock says
-uv run pytest             # full suite
+uv run pytest             # full suite (needs TEST_DATABASE_URL, see below)
 uv run ruff check .       # lint
 uv run ruff format .      # format (CI runs --check)
 uv run mypy               # strict type check
 uv run python -m tools.check_workflows   # public-CI rules for .github/workflows
 ```
+
+**Database tests** run against real Postgres, never SQLite, so foreign keys and constraints behave as in production. Each test gets a fresh database that is dropped afterwards. Run a throwaway server and point the tests at it. The variable deliberately has no `LT_` prefix, because the app refuses unknown `LT_*` settings:
+
+```bash
+docker run -d --name lt-test-pg -e POSTGRES_PASSWORD=devonly -p 127.0.0.1:55432:5432 postgres:18.6-alpine
+export TEST_DATABASE_URL=postgresql+psycopg://postgres:devonly@127.0.0.1:55432/postgres
+```
+
+**Migrations** live in `src/learning_tracker/db/migrations/versions/`:
+- Each one has a working downgrade.
+- `tests/db/test_migrations.py` checks that the migrated schema equals the models, and that downgrade to base removes everything.
+- Any new foreign key to `users.id` must cascade, or be listed in `tests/db/test_user_data_cascade.py`.
 
 CI (`.github/workflows/ci.yml`) runs the same commands, the workflow checker and gitleaks over the full history. The `required` job is the single status to look at; every new job must be in its `needs` (the checker enforces it). `codeql.yml` runs on PRs and weekly; `audit.yml` runs pip-audit weekly, on demand and on `main`.
 
