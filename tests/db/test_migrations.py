@@ -17,6 +17,10 @@ BASELINE_TABLES = {
     "sessions",
     "password_resets",
     "email_confirmations",
+    "invite_codes",
+    "invite_redemptions",
+    "admin_audit",
+    "rate_limit_buckets",
 }
 
 

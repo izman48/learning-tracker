@@ -10,7 +10,7 @@ from sqlalchemy import Engine, create_engine, delete, insert, select
 from sqlalchemy.exc import IntegrityError
 
 from learning_tracker.db.migrate import alembic_config
-from learning_tracker.db.models import Session, User
+from learning_tracker.db.models import InviteCode, Session, User
 
 
 @pytest.fixture
@@ -39,6 +39,17 @@ def test_emails_are_unique_ignoring_case(engine: Engine) -> None:
 
     with pytest.raises(IntegrityError):
         add_user(engine, "reader@EXAMPLE.com")
+
+
+@pytest.mark.parametrize(("max_uses", "uses"), [(0, 0), (1001, 0), (3, 4), (3, -1)])
+def test_invite_code_use_counts_are_bounded(engine: Engine, max_uses: int, uses: int) -> None:
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(insert(InviteCode).values(code_hash=b"h" * 32, max_uses=max_uses, uses=uses))
+
+
+def test_valid_invite_code_is_accepted(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(insert(InviteCode).values(code_hash=b"h" * 32, max_uses=3, uses=3))
 
 
 def test_deleting_a_user_deletes_their_sessions(engine: Engine) -> None:

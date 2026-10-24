@@ -16,6 +16,9 @@ from sqlalchemy import Column, ForeignKey, MetaData, Table, Uuid
 from learning_tracker.db.models import Base
 
 SET_NULL_ALLOWED = {
+    ("admin_audit", "actor_id"),
+    ("invite_codes", "created_by"),
+    ("invite_redemptions", "user_id"),
     ("password_resets", "created_by"),
 }
 
@@ -52,7 +55,7 @@ def test_every_user_reference_cascades_or_is_an_allowed_set_null() -> None:
         for fk in t.foreign_keys
         if fk.column.table.name == "users"
     ]
-    assert len(references) >= 4  # precondition: we are checking the real schema
+    assert len(references) >= 6  # precondition: we are checking the real schema
 
     assert user_reference_problems(Base.metadata) == []
 
