@@ -24,6 +24,9 @@ BANNED = {
 def banned_imports(source: str) -> list[str]:
     found: list[str] = []
     for node in ast.walk(ast.parse(source)):
+        # Dynamic imports could load any client by a computed name, so web has none.
+        if isinstance(node, ast.Call) and _is_dynamic_import(node.func):
+            found.append("dynamic import")
         names: list[str] = []
         if isinstance(node, ast.Import):
             names = [alias.name for alias in node.names]
@@ -33,6 +36,12 @@ def banned_imports(source: str) -> list[str]:
             if any(name == b or name.startswith(b + ".") for b in BANNED):
                 found.append(name)
     return found
+
+
+def _is_dynamic_import(func: ast.expr) -> bool:
+    if isinstance(func, ast.Name):
+        return func.id in {"__import__", "import_module"}
+    return isinstance(func, ast.Attribute) and func.attr == "import_module"
 
 
 def test_web_package_imports_no_outbound_client() -> None:
@@ -51,3 +60,13 @@ def test_detector_fires_on_each_import_form() -> None:
     assert "http.client" in banned_imports("from http import client")
     assert banned_imports("from anthropic import Anthropic") == ["anthropic", "anthropic.Anthropic"]
     assert banned_imports("import json, pathlib") == []
+
+
+def test_detector_fires_on_dynamic_imports() -> None:
+    assert banned_imports("import importlib\nimportlib.import_module('httpx')") == [
+        "dynamic import"
+    ]
+    assert banned_imports("from importlib import import_module\nimport_module(name)") == [
+        "dynamic import"
+    ]
+    assert banned_imports("__import__('socket')") == ["dynamic import"]
