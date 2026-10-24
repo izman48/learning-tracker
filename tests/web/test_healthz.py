@@ -12,6 +12,7 @@ CONFIG = WebConfig(
     session_lifetime=timedelta(days=1),
     public_origin="https://reads.example.com",
     ip_key=b"i" * 32,
+    invite_key=b"v" * 32,
 )
 
 

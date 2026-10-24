@@ -16,6 +16,7 @@ def test_startup_provides_a_working_session_factory(migrated_database_url: str) 
         session_lifetime=timedelta(days=1),
         public_origin="https://reads.example.com",
         ip_key=b"i" * 32,
+        invite_key=b"v" * 32,
     )
     app = create_app(config)
 

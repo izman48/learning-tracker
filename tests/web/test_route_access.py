@@ -16,6 +16,7 @@ from tests.web.routes import api_routes
 PUBLIC = {
     ("GET", "/healthz"),
     ("POST", "/api/auth/login"),
+    ("POST", "/api/auth/signup"),
     ("POST", "/api/auth/logout"),  # works without a session: just clears the cookie
 }
 
