@@ -10,9 +10,14 @@ which yields no patch for a merge, and a pull_request run checks out GitHub's me
 commit. Content that exists only in a merge's conflict resolution is therefore not
 scanned; that is a known gitleaks limit.
 
-    python -m tools.gitleaks_guard <gitleaks.log>    (run from the repo root)
+    python -m tools.gitleaks_guard <gitleaks.log> --scope head|all   (from the repo root)
+
+Scopes match how gitleaks was run: `head` for `--log-opts=HEAD` (a pull request
+scans its own ancestry, so other branches cannot fail it) and `all` for
+`--log-opts=--all` (main and the weekly sweep scan every pushed branch).
 """
 
+import argparse
 import re
 import subprocess
 import sys
@@ -22,9 +27,15 @@ SCANNED = re.compile(r"\bINF (\d+) commits scanned")
 ERROR_LINE = re.compile(r"\bERR\b")
 
 
-def expected_commits(repo: Path) -> int:
-    out = subprocess.run(
-        ["git", "rev-list", "--all", "--no-merges", "--count"],  # noqa: S607
+SCOPES = {"head": "HEAD", "all": "--all"}
+
+
+def expected_commits(repo: Path, scope: str) -> int:
+    if scope not in SCOPES:
+        raise ValueError(f"unknown scope {scope!r}; use one of {', '.join(SCOPES)}")
+    # The argument comes from the fixed SCOPES table, never from input.
+    out = subprocess.run(  # noqa: S603
+        ["git", "rev-list", SCOPES[scope], "--no-merges", "--count"],  # noqa: S607
         cwd=repo,
         check=True,
         capture_output=True,
@@ -48,8 +59,11 @@ def problems(log: str, expected_commits: int) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    (log_path,) = argv
-    found = problems(Path(log_path).read_text(), expected_commits(Path.cwd()))
+    parser = argparse.ArgumentParser(prog="gitleaks_guard")
+    parser.add_argument("log")
+    parser.add_argument("--scope", choices=sorted(SCOPES), required=True)
+    args = parser.parse_args(argv)
+    found = problems(Path(args.log).read_text(), expected_commits(Path.cwd(), args.scope))
     for problem in found:
         print(problem)
     return 1 if found else 0

@@ -70,7 +70,7 @@ jobs:
         with:
           version: "0.12.24"
           enable-cache: false
-      - name: gitleaks over the full history
+      - name: gitleaks over this pull request's ancestry
         env:
           IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
         # The guard fails unless gitleaks scanned every commit and logged no error:
@@ -80,9 +80,9 @@ jobs:
           set -euo pipefail
           docker run --rm -v "$PWD:/repo" --user "$(id -u):$(id -g)" \
             -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
-            "$IMAGE" git /repo --log-opts=--all --redact --no-banner --no-color --exit-code 1 2>&1 \
+            "$IMAGE" git /repo --log-opts=HEAD --redact --no-banner --no-color --exit-code 1 2>&1 \
             | tee "$RUNNER_TEMP/gitleaks.log"
-          uv run --no-project python -m tools.gitleaks_guard "$RUNNER_TEMP/gitleaks.log"
+          uv run --no-project python -m tools.gitleaks_guard "$RUNNER_TEMP/gitleaks.log" --scope head
 
   required:
     if: always()
