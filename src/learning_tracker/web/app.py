@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from learning_tracker.db.engine import make_engine, make_session_factory
+from learning_tracker.web.admin.codes import router as admin_codes_router
 from learning_tracker.web.auth.routes import router as auth_router
 from learning_tracker.web.auth.slots import PasswordSlots
 from learning_tracker.web.config import WebConfig
@@ -54,6 +55,7 @@ def create_app(config: WebConfig) -> FastAPI:
     app.add_exception_handler(Exception, server_error(config.public_origin))
     app.add_middleware(SecurityMiddleware, public_origin=config.public_origin)
     app.include_router(auth_router)
+    app.include_router(admin_codes_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
