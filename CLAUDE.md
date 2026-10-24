@@ -67,4 +67,7 @@ CI (`.github/workflows/ci.yml`) runs the same commands, the workflow checker and
   - No cache writes in workflows that PRs trigger.
   - `npm ci` always gets `--ignore-scripts`.
 - **Config** comes from `LT_*` environment variables only. A missing required value stops startup.
+  - Entrypoints call `learning_tracker.cli.require_settings(service)` once; code receives the `Settings`.
+  - A new setting goes in four places, and tests fail until all agree: `config/catalogue.py` (owner services, default, parser), the `Settings` field, `.env.example` and `docs/configuration.md`.
+  - `uv run lt check-config web|worker|fetcher` prints the effective settings with secrets masked.
 - **The architecture decision record** lives outside this repo. Behaviour that matters is restated in code comments and tests, not referenced by ticket id alone.

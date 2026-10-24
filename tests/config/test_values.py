@@ -196,3 +196,12 @@ def test_postgres_url_requires_the_installed_psycopg3_driver() -> None:
 def test_https_url_refuses_userinfo(raw: str) -> None:
     assert v.https_url("https://example.com/repo")  # precondition
     refuses(v.https_url, raw)
+
+
+def test_non_ascii_origin_host_is_converted_to_the_form_browsers_send() -> None:
+    assert v.origin("https://Bücher.example") == "https://xn--bcher-kva.example"
+
+
+@pytest.mark.parametrize("raw", ["https://straße.example", "https://a‍b.example"])
+def test_origin_hosts_where_idna_versions_disagree_are_refused(raw: str) -> None:
+    assert "xn--" in refuses(v.origin, raw)
