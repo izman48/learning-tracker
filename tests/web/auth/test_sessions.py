@@ -5,10 +5,10 @@ import hashlib
 import hmac
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from learning_tracker.db.engine import make_engine, make_session_factory
@@ -111,7 +111,7 @@ async def test_missing_or_malformed_tokens_read_as_nobody(
 async def test_expired_session_reads_as_nobody(db: AsyncSession) -> None:
     user = await add_user(db)
     token = await issued(db, user.id)
-    await db.execute(update(Session).values(expires_at=datetime.now(UTC) - timedelta(seconds=1)))
+    await db.execute(update(Session).values(expires_at=text("now() - interval '1 second'")))
     await db.commit()
 
     assert await store(db).user_id_for(token) is None
@@ -128,13 +128,12 @@ async def test_inactive_user_reads_as_nobody(db: AsyncSession) -> None:
 
 async def test_lifetime_comes_from_settings(db: AsyncSession) -> None:
     user = await add_user(db)
-    before = datetime.now(UTC)
     await store(db, days=7).issue(user.id)
     await db.commit()
-    after = datetime.now(UTC)
 
-    expires = (await db.execute(select(Session.expires_at))).scalar_one()
-    assert before + timedelta(days=7) <= expires <= after + timedelta(days=7)
+    # Read on the database's clock, the same clock that set it.
+    remaining = (await db.execute(text("select expires_at - now() from sessions"))).scalar_one()
+    assert timedelta(days=7) - timedelta(minutes=1) < remaining <= timedelta(days=7)
 
 
 async def test_login_rotates_the_presented_session(db: AsyncSession) -> None:
@@ -223,7 +222,7 @@ async def test_purge_removes_only_expired_sessions(db: AsyncSession) -> None:
     await db.execute(
         update(Session)
         .where(Session.token_hash != store(db).hash(live))
-        .values(expires_at=datetime.now(UTC) - timedelta(days=1))
+        .values(expires_at=text("now() - interval '1 day'"))
     )
     await db.commit()
 

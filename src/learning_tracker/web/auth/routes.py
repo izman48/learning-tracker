@@ -1,12 +1,12 @@
 """Our own auth routes. Request bodies accept only the fields listed here."""
 
 import logging
-from datetime import UTC, datetime
 from typing import Annotated
 
 from anyio import to_thread
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func
 
 from learning_tracker.db.models import PasswordChangeSource, User
 from learning_tracker.web.auth.deps import (
@@ -134,7 +134,7 @@ async def change_password(
         user,
         {
             "hashed_password": new_hash,
-            "password_changed_at": datetime.now(UTC),
+            "password_changed_at": func.now(),  # the database's clock
             "password_changed_via": PasswordChangeSource.USER,
         },
     )

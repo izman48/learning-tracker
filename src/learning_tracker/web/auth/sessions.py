@@ -5,6 +5,9 @@ HMAC-SHA256(session subkey, token), so reading the sessions table yields nothing
 browser can present, and a token is useless under a different LT_SECRET_KEY.
 fastapi-users' own DatabaseStrategy stores the raw token, which is why this exists.
 
+Expiry is set and checked on the database's clock only (func.now()), never Python's,
+so a host whose clock disagrees with the database's cannot stretch or cut a session.
+
 The store never commits: the caller owns the transaction, so a route's changes and
 its session changes land together or not at all.
 """
@@ -14,11 +17,11 @@ import hmac
 import re
 import secrets
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any, cast
 
 from fastapi_users.authentication import CookieTransport
-from sqlalchemy import CursorResult, delete, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from learning_tracker.db.models import Session, User
@@ -72,7 +75,7 @@ class SessionStore:
             Session(
                 token_hash=self.hash(token),
                 user_id=user_id,
-                expires_at=datetime.now(UTC) + self.lifetime,
+                expires_at=func.now() + self.lifetime,
             )
         )
         await self.db.flush()
@@ -87,7 +90,7 @@ class SessionStore:
             .join(User, User.id == Session.user_id)
             .where(
                 Session.token_hash == self.hash(token),
-                Session.expires_at > datetime.now(UTC),
+                Session.expires_at > func.now(),
                 User.is_active.is_(True),
             )
         )
@@ -103,6 +106,6 @@ class SessionStore:
     async def purge_expired(self) -> int:
         result = cast(
             CursorResult[Any],
-            await self.db.execute(delete(Session).where(Session.expires_at <= datetime.now(UTC))),
+            await self.db.execute(delete(Session).where(Session.expires_at <= func.now())),
         )
         return result.rowcount
