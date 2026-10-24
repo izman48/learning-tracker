@@ -57,3 +57,19 @@ def test_no_hsts_for_a_plain_http_localhost_origin(config: WebConfig) -> None:
 
     assert response.headers["x-content-type-options"] == "nosniff"  # precondition
     assert "strict-transport-security" not in response.headers
+
+
+def test_unhandled_errors_still_carry_the_headers_and_no_traceback(config: WebConfig) -> None:
+    app = create_app(config)
+
+    @app.get("/api/boom")
+    def boom() -> None:
+        raise RuntimeError("internal detail that must not leak")
+
+    response = TestClient(app, raise_server_exceptions=False).get("/api/boom")
+
+    assert response.status_code == 500
+    for name, value in EXPECTED.items():
+        assert response.headers.get(name) == value, name
+    assert response.headers["cache-control"] == "no-store"
+    assert "internal detail" not in response.text and "Traceback" not in response.text

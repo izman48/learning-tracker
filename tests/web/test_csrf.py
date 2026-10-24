@@ -73,3 +73,11 @@ def test_safe_methods_need_no_origin(client: TestClient) -> None:
     client.headers.pop("origin")
 
     assert client.get("/healthz").status_code == 200
+
+
+@pytest.mark.parametrize("method", ["PROPFIND", "LINK", "PURGE"])
+def test_unusual_methods_are_unsafe_by_default(client: TestClient, method: str) -> None:
+    # Deny by default: only GET, HEAD and OPTIONS skip the check.
+    client.headers.pop("origin")
+
+    assert client.request(method, "/api/me").status_code == 403

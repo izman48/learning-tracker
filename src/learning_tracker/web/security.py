@@ -1,7 +1,11 @@
 """Security headers on every response, and the CSRF check on state-changing requests.
 
+Starlette answers an unhandled exception from its outermost layer, outside this
+middleware, so app.py's 500 handler adds the same headers itself.
+
 CSRF: SameSite=Lax keeps the session cookie off most cross-site POSTs. As a second
-layer that does not depend on browser cookie rules, an unsafe request must
+layer that does not depend on browser cookie rules, a request with any method but
+GET, HEAD or OPTIONS must
 - carry an Origin header equal to LT_PUBLIC_ORIGIN (missing is refused),
 - not be marked cross-site or same-site by Sec-Fetch-Site, when the browser sends it,
 - send JSON, which a plain HTML form cannot.
@@ -33,30 +37,35 @@ HEADERS = {
     "permissions-policy": PERMISSIONS,
 }
 HSTS = "max-age=63072000"  # two years; Caddy (or the self-hoster's proxy) terminates TLS
-UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Deny by default: every method except these must pass the CSRF check.
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def security_headers(public_origin: str, path: str) -> dict[str, str]:
+    headers = dict(HEADERS)
+    if public_origin.startswith("https://"):
+        headers["strict-transport-security"] = HSTS
+    if path.startswith("/api/"):
+        headers["cache-control"] = "no-store"
+    return headers
 
 
 class SecurityMiddleware:
     def __init__(self, app: ASGIApp, *, public_origin: str) -> None:
         self.app = app
         self.public_origin = public_origin
-        self.headers = dict(HEADERS)
-        if public_origin.startswith("https://"):
-            self.headers["strict-transport-security"] = HSTS
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        is_api = scope["path"].startswith("/api/")
+        extra = security_headers(self.public_origin, scope["path"])
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                for name, value in self.headers.items():
+                for name, value in extra.items():
                     headers[name] = value
-                if is_api:
-                    headers["cache-control"] = "no-store"
             await send(message)
 
         refusal = self.csrf_refusal(scope)
@@ -67,7 +76,7 @@ class SecurityMiddleware:
         await self.app(scope, receive, send_with_headers)
 
     def csrf_refusal(self, scope: Scope) -> tuple[int, str] | None:
-        if scope["method"] not in UNSAFE_METHODS:
+        if scope["method"] in SAFE_METHODS:
             return None
         headers = Headers(scope=scope)
         if headers.get("origin") != self.public_origin:
