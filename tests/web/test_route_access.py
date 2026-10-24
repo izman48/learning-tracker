@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi.dependencies.models import Dependant
 
+from learning_tracker.web.admin.deps import current_admin
 from learning_tracker.web.app import create_app
 from learning_tracker.web.auth.deps import current_user
 from learning_tracker.web.config import WebConfig
@@ -30,7 +31,7 @@ def calls(dependant: Dependant) -> Iterator[Callable[..., Any] | None]:
 def unprotected(app_routes: Any) -> set[tuple[str, str]]:
     found = set()
     for route in api_routes(app_routes):
-        if current_user not in set(calls(route.dependant)):
+        if not {current_user, current_admin} & set(calls(route.dependant)):
             found |= {(method, route.path) for method in route.methods or set()}
     return found
 
