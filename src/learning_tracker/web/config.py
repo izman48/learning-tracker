@@ -12,6 +12,8 @@ class WebConfig:
     session_key: bytes = field(repr=False)
     session_lifetime: timedelta
     public_origin: str
+    ip_key: bytes = field(repr=False)  # HMAC key for IPs and emails in rate-limit buckets
+    trusted_proxy_ips: tuple[str, ...] = ()
 
     @classmethod
     def from_settings(cls, settings: Settings) -> WebConfig:
@@ -22,4 +24,6 @@ class WebConfig:
             session_key=settings.require_keys().session,
             session_lifetime=timedelta(days=settings.session_days),
             public_origin=settings.public_origin,
+            ip_key=settings.require_keys().ip,
+            trusted_proxy_ips=settings.trusted_proxy_ips,
         )

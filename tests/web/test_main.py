@@ -49,3 +49,12 @@ def test_app_factory_refuses_to_start_on_bad_config(
 
     assert exit_info.value.code == 2
     assert "LT_SECRET_KEY is required for web" in capsys.readouterr().err
+
+
+def test_web_config_carries_the_ip_key_and_trusted_proxies() -> None:
+    settings = load_settings("web", {**ENV, "LT_TRUSTED_PROXY_IPS": "172.31.251.10"})
+
+    config = WebConfig.from_settings(settings)
+
+    assert config.ip_key == settings.require_keys().ip
+    assert config.trusted_proxy_ips == ("172.31.251.10",)

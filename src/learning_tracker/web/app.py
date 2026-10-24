@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from learning_tracker.db.engine import make_engine, make_session_factory
 from learning_tracker.web.auth.routes import router as auth_router
+from learning_tracker.web.auth.slots import PasswordSlots
 from learning_tracker.web.config import WebConfig
 from learning_tracker.web.security import SecurityMiddleware, security_headers
 
@@ -42,6 +43,7 @@ def create_app(config: WebConfig) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = make_engine(config.database_url)
         app.state.session_factory = make_session_factory(engine)
+        app.state.password_slots = PasswordSlots()
         yield
         await engine.dispose()
 
