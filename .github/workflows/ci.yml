@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, but let every run on main finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   api:
@@ -30,9 +31,46 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
 
+  workflows:
+    # Separate job so a failure here can't be hidden behind another job's result.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.24"
+          enable-cache: false
+      - run: uv sync --locked
+      - run: uv run python -m tools.check_workflows
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: gitleaks over the full history
+        # Fail loudly if the scan did not really run: a git error inside the
+        # container ("dubious ownership") otherwise reports "0 commits scanned,
+        # no leaks found" with exit code 0.
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/repo" --user "$(id -u):$(id -g)" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git /repo --log-opts=--all --redact --no-banner --no-color --exit-code 1 2>&1 \
+            | tee "$RUNNER_TEMP/gitleaks.log"
+          grep -Eq '[1-9][0-9]* commits scanned' "$RUNNER_TEMP/gitleaks.log"
+          if grep -q ' ERR ' "$RUNNER_TEMP/gitleaks.log"; then exit 1; fi
+
   required:
     if: always()
-    needs: [api]
+    needs: [api, workflows, secrets]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
