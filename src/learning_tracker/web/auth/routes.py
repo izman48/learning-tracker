@@ -2,10 +2,11 @@
 
 import logging
 from typing import Annotated
+from zoneinfo import available_timezones
 
 from anyio import to_thread
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import func
 
 from learning_tracker.db.models import PasswordChangeSource, User
@@ -22,9 +23,13 @@ from learning_tracker.web.auth.deps import (
 from learning_tracker.web.auth.manager import UserManager
 from learning_tracker.web.auth.passwords import MAX_PASSWORD, MIN_PASSWORD
 from learning_tracker.web.auth.sessions import COOKIE_NAME, SessionStore, cookie_transport
+from learning_tracker.web.auth.signup import SignupRefused, create_account
+from learning_tracker.web.config import WebConfig
 from learning_tracker.web.ratelimit import (
     LOGIN_PER_IP,
     PASSWORD_PER_ACCOUNT,
+    SIGNUP_PER_INSTANCE,
+    SIGNUP_PER_IP,
     RateLimiter,
     account_subject,
 )
@@ -33,6 +38,12 @@ log = logging.getLogger("learning_tracker.auth")
 router = APIRouter(prefix="/api")
 
 BAD_CREDENTIALS = "Email or password is wrong"
+# Spec AUTH-2/4/7: the exact copy the PWA shows.
+SIGNUP_REFUSALS = {
+    "code": (400, "This code can't be used. Check it with the person who sent it."),
+    "exists": (400, "We couldn't create your account. If you already have one, sign in instead."),
+    "closed": (403, "This app isn't taking new accounts right now."),
+}
 
 
 class Strict(BaseModel):
@@ -47,6 +58,19 @@ class LoginIn(Strict):
 class PasswordChangeIn(Strict):
     current_password: str = Field(min_length=1, max_length=MAX_PASSWORD)
     new_password: str = Field(min_length=MIN_PASSWORD, max_length=MAX_PASSWORD)
+
+
+def _known_timezone(value: str) -> str:
+    if value not in available_timezones():
+        raise ValueError("unknown time zone")
+    return value
+
+
+class SignupIn(Strict):
+    email: EmailStr = Field(max_length=320)
+    password: str = Field(min_length=MIN_PASSWORD, max_length=MAX_PASSWORD)
+    timezone: Annotated[str, AfterValidator(_known_timezone)] = Field(max_length=64)
+    code: str | None = Field(default=None, max_length=64)
 
 
 class MeOut(BaseModel):
@@ -87,6 +111,41 @@ async def login(
     await db.commit()
     log.info("auth.login user_id=%s", user.id)
     return await cookie_transport(sessions.lifetime).get_login_response(token)
+
+
+@router.post("/auth/signup", status_code=status.HTTP_201_CREATED)
+async def signup(
+    body: SignupIn,
+    request: Request,
+    db: DB,
+    manager: Manager,
+    sessions: Sessions,
+    limiter: Limiter,
+) -> Response:
+    await enforce(limiter, SIGNUP_PER_IP, client_ip(request))
+    await enforce(limiter, SIGNUP_PER_INSTANCE, "instance")
+    config: WebConfig = request.app.state.config
+    async with password_slot(request):  # hashed before the sign-up lock is taken
+        hashed = await to_thread.run_sync(manager.password_helper.hash, body.password)
+    try:
+        user_id = await create_account(
+            db,
+            config,
+            email=str(body.email),
+            hashed_password=hashed,
+            timezone=body.timezone,
+            code=body.code,
+        )
+    except SignupRefused as refused:
+        log.info("auth.signup_refused reason=%s", refused.reason)
+        code, detail = SIGNUP_REFUSALS[refused.reason]
+        raise HTTPException(code, detail) from None
+    token = await sessions.issue(user_id, replacing=request.cookies.get(COOKIE_NAME))
+    await db.commit()
+    log.info("auth.signup user_id=%s", user_id)
+    response = await cookie_transport(sessions.lifetime).get_login_response(token)
+    response.status_code = status.HTTP_201_CREATED
+    return response
 
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)

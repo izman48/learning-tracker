@@ -57,4 +57,6 @@ def test_web_config_carries_the_ip_key_and_trusted_proxies() -> None:
     config = WebConfig.from_settings(settings)
 
     assert config.ip_key == settings.require_keys().ip
+    assert config.invite_key == settings.require_keys().invite
+    assert config.invite_required is True and config.max_users == 50
     assert config.trusted_proxy_ips == ("172.31.251.10",)

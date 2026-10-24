@@ -45,6 +45,9 @@ class Limit:
 LOGIN_PER_IP = Limit("login-ip", 5, timedelta(minutes=1))
 # Every password re-entry (sign-in, change password, later delete account) shares this.
 PASSWORD_PER_ACCOUNT = Limit("password-account", 10, timedelta(minutes=15))
+# Sign-up and invite-code guessing: per IP, and a ceiling for the whole instance.
+SIGNUP_PER_IP = Limit("signup-ip", 10, timedelta(hours=1))
+SIGNUP_PER_INSTANCE = Limit("signup-instance", 100, timedelta(hours=1))
 
 
 def ip_subject(ip: str) -> str:
