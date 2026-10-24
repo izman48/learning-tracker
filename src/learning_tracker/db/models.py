@@ -14,10 +14,13 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
     Index,
+    Integer,
     LargeBinary,
     MetaData,
     String,
@@ -112,3 +115,57 @@ class EmailConfirmation(Base):
     )
     token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+    __table_args__ = (
+        CheckConstraint("max_uses BETWEEN 1 AND 1000", name="max_uses_range"),
+        CheckConstraint("uses >= 0 AND uses <= max_uses", name="uses_within_max"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    code_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True)
+    label: Mapped[str | None] = mapped_column(String(80))
+    max_uses: Mapped[int] = mapped_column(Integer)
+    uses: Mapped[int] = mapped_column(Integer, server_default="0")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(USER_FK, ondelete="SET NULL"))
+    created_at: Mapped[datetime] = created_at_column()
+
+
+class InviteRedemption(Base):
+    """Who used which code. Survives account deletion as "deleted account"."""
+
+    __tablename__ = "invite_redemptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    code_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("invite_codes.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(USER_FK, ondelete="SET NULL"))
+    redeemed_at: Mapped[datetime] = created_at_column()
+
+
+class AdminAudit(Base):
+    """Append-only record of admin actions."""
+
+    __tablename__ = "admin_audit"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey(USER_FK, ondelete="SET NULL"))
+    action: Mapped[str] = mapped_column(String(64))
+    target_kind: Mapped[str | None] = mapped_column(String(32))
+    target_id: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = created_at_column()
+
+
+class RateLimitBucket(Base):
+    """Fixed-window counters. Keys hold HMACs of IPs and emails, never the raw values."""
+
+    __tablename__ = "rate_limit_buckets"
+
+    key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    count: Mapped[int] = mapped_column(Integer)
