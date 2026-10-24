@@ -5,7 +5,7 @@ import re
 from tests.repo.conftest import tracked_files
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}")
-ALLOWED_DOMAIN = re.compile(r"@(?:[A-Za-z0-9-]+\.)*example\.(?:com|org|net)$")
+ALLOWED_DOMAIN = re.compile(r"@(?:[A-Za-z0-9-]+\.)*example\.(?:com|org|net)$", re.IGNORECASE)
 SKIP_SUFFIXES = {".lock"}
 SKIP_NAMES = {"LICENSE"}
 
@@ -33,3 +33,4 @@ def test_detector_fires_on_a_non_example_address() -> None:
     address = "admin" + "@" + "mysite.io"  # built at runtime so this file passes its own scan
     assert offending_emails(f"contact {address}") == [address]
     assert offending_emails("contact admin@reads.example.com") == []
+    assert offending_emails("contact Admin@Reads.EXAMPLE.com") == []  # domains ignore case
