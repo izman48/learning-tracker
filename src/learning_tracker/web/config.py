@@ -1,0 +1,25 @@
+"""What the web process needs from the settings, in one small typed object."""
+
+from dataclasses import dataclass, field
+from datetime import timedelta
+
+from learning_tracker.config import Settings
+
+
+@dataclass(frozen=True)
+class WebConfig:
+    database_url: str = field(repr=False)
+    session_key: bytes = field(repr=False)
+    session_lifetime: timedelta
+    public_origin: str
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> WebConfig:
+        if settings.database_url is None or settings.public_origin is None:
+            raise RuntimeError("web settings lack a database URL or public origin")
+        return cls(
+            database_url=settings.database_url.reveal(),
+            session_key=settings.require_keys().session,
+            session_lifetime=timedelta(days=settings.session_days),
+            public_origin=settings.public_origin,
+        )
