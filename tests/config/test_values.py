@@ -58,7 +58,7 @@ def test_hhmm(raw: str) -> None:
 
 
 def test_secret_key_yields_subkeys_and_refuses_weak_or_malformed_input() -> None:
-    good = base64.b64encode(b"k" * 48).decode()
+    good = base64.b64encode(bytes(range(48))).decode()
     assert len(v.secret_key(good).session) == 32
     short = base64.b64encode(b"k" * 31).decode()
     for bad in (short, "not base64 !!", "a" * 10):
@@ -154,3 +154,45 @@ def test_prices() -> None:
         '{"m-1": {"in": "1", "out": 1}}',
     ):
         refuses(v.prices, bad)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("HTTPS://Reads.Example.COM", "https://reads.example.com"),
+        ("https://reads.example.com:443", "https://reads.example.com"),
+        ("https://reads.example.com:8443", "https://reads.example.com:8443"),
+        ("http://LOCALHOST:80/", "http://localhost"),
+        ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
+    ],
+)
+def test_origin_is_normalised_as_browsers_send_it(raw: str, expected: str) -> None:
+    # Compared byte for byte against the browser's Origin header by the CSRF check.
+    assert v.origin(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw", ["https://reads.example.com:99999", "https://reads.example.com:abc", "https://h:0"]
+)
+def test_origin_refuses_invalid_ports(raw: str) -> None:
+    refuses(v.origin, raw)
+
+
+@pytest.mark.parametrize("decoded", [bytes(48), b"k" * 48, b"ab" * 24, bytes(range(15)) * 4])
+def test_secret_key_refuses_trivially_low_entropy_keys(decoded: bytes) -> None:
+    assert v.secret_key(base64.b64encode(bytes(range(48))).decode())  # precondition
+    assert "too little randomness" in refuses(v.secret_key, base64.b64encode(decoded).decode())
+
+
+def test_postgres_url_requires_the_installed_psycopg3_driver() -> None:
+    assert v.postgres_url("postgresql+psycopg://lt:pw@db:5432/lt").reveal()  # precondition
+    for bare in ("postgresql://lt:pw@db:5432/lt", "postgres://lt:pw@db/lt"):
+        assert "postgresql+psycopg://" in refuses(v.postgres_url, bare)
+
+
+@pytest.mark.parametrize(
+    "raw", ["https://user:pw@example.com/repo", "https://user@example.com/repo"]
+)
+def test_https_url_refuses_userinfo(raw: str) -> None:
+    assert v.https_url("https://example.com/repo")  # precondition
+    refuses(v.https_url, raw)
