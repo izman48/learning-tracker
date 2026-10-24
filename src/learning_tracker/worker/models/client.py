@@ -17,7 +17,7 @@ import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 import anthropic
 import httpx2
@@ -47,6 +47,19 @@ class Usage:
     input_tokens: int
     output_tokens: int
     web_search_requests: int = 0
+
+
+@dataclass(frozen=True)
+class ModelTuning:
+    """Per-model request settings learned from the Models API at startup.
+
+    Steps here are short judgements, so thinking is turned off and effort set low
+    wherever the model accepts it; otherwise the parameter is not sent at all, so an
+    unknown model is never sent a setting it would reject.
+    """
+
+    thinking_off: frozenset[str] = frozenset()
+    effort_low: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -134,8 +147,15 @@ def make_sdk_client(
 
 
 class AnthropicModelClient:
-    def __init__(self, api_key: str, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        transport: httpx2.AsyncBaseTransport | None = None,
+        tuning: ModelTuning | None = None,
+    ) -> None:
         self._client = make_sdk_client(api_key, transport=transport)
+        self._tuning = tuning or ModelTuning()
 
     @staticmethod
     def render(data: Sequence[UntrustedBlock], *, tag: str) -> str:
@@ -171,6 +191,7 @@ class AnthropicModelClient:
                 system=guarded_system,
                 messages=[{"role": "user", "content": self.render(data, tag=tag)}],
                 output_format=schema,
+                **self._tuned(model),
             )
         except ValidationError:
             raise ModelOutputInvalid(f"{step} output did not match the schema") from None
@@ -186,6 +207,14 @@ class AnthropicModelClient:
         if parsed is None:
             raise ModelOutputInvalid(f"{step} returned no output")
         return ModelResult(parsed=parsed, usage=_usage(response.usage), model=model)
+
+    def _tuned(self, model: str) -> dict[str, Any]:
+        extra: dict[str, Any] = {}
+        if model in self._tuning.thinking_off:
+            extra["thinking"] = {"type": "disabled"}
+        if model in self._tuning.effort_low:
+            extra["output_config"] = {"effort": "low"}
+        return extra
 
 
 def _usage(usage: anthropic.types.Usage) -> Usage:
