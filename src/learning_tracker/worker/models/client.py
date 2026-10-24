@@ -119,7 +119,10 @@ class ModelClient(Protocol):
 
 
 def make_sdk_client(
-    api_key: str, *, transport: httpx2.AsyncBaseTransport | None = None
+    api_key: str,
+    *,
+    transport: httpx2.AsyncBaseTransport | None = None,
+    timeout_s: float = REQUEST_TIMEOUT_S,
 ) -> anthropic.AsyncAnthropic:
     """The SDK client every worker call uses. Nothing in the environment can change
     where the key goes:
@@ -135,13 +138,13 @@ def make_sdk_client(
         transport=transport,
         trust_env=False,
         follow_redirects=False,
-        timeout=REQUEST_TIMEOUT_S,
+        timeout=timeout_s,
     )
     return anthropic.AsyncAnthropic(
         api_key=api_key,
         base_url=API_BASE_URL,
         max_retries=0,
-        timeout=REQUEST_TIMEOUT_S,
+        timeout=timeout_s,
         http_client=http,
     )
 

@@ -32,7 +32,7 @@ def model(
     *,
     structured: bool = True,
     web_search: bool = True,
-    lifecycle: str = "active",
+    lifecycle: str | None = "active",
     capabilities: bool = True,
     thinking_off: bool = True,
     effort_low: bool = True,
@@ -49,7 +49,7 @@ def model(
         "id": model_id,
         "display_name": model_id,
         "created_at": "2026-09-01T00:00:00Z",
-        "lifecycle": lifecycle,
+        **({"lifecycle": lifecycle} if lifecycle is not None else {}),
         "capabilities": caps if capabilities else None,
     }
 
@@ -142,3 +142,22 @@ async def test_the_check_reports_which_models_take_thinking_off_and_low_effort()
     result = await check_models(MODELS, client)
     assert result.tuning.thinking_off == {"claude-haiku-5-5"}
     assert result.tuning.effort_low == {"claude-haiku-5-5", "claude-sonnet-5-5"}
+
+
+async def test_a_missing_lifecycle_is_reported_as_unknown_not_assumed_active() -> None:
+    client, _ = catalogue({
+        "claude-haiku-5-5": model("claude-haiku-5-5", lifecycle=None),
+        "claude-sonnet-5-5": model("claude-sonnet-5-5"),
+    })  # fmt: skip
+    result = await check_models(MODELS, client)
+    assert result.problems == []
+    assert "LT_MODEL_SCREEN=claude-haiku-5-5: model lifecycle unknown" in result.warnings
+
+
+def test_startup_checks_use_a_short_timeout_of_their_own() -> None:
+    from learning_tracker.worker.models.startup import CHECK_TIMEOUT_S, models_api_client
+
+    assert CHECK_TIMEOUT_S <= 15
+    client = models_api_client("test-key-not-real")
+    assert client.timeout == CHECK_TIMEOUT_S
+    assert client.max_retries == 0
