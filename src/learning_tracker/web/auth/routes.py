@@ -10,13 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from learning_tracker.db.models import PasswordChangeSource, User
 from learning_tracker.web.auth.deps import (
     DB,
+    client_ip,
     current_user,
+    enforce,
+    rate_limiter,
     session_store,
     user_manager,
 )
 from learning_tracker.web.auth.manager import UserManager
 from learning_tracker.web.auth.passwords import MAX_PASSWORD, MIN_PASSWORD
 from learning_tracker.web.auth.sessions import COOKIE_NAME, SessionStore, cookie_transport
+from learning_tracker.web.ratelimit import LOGIN_PER_IP, PASSWORD_PER_ACCOUNT, RateLimiter
 
 log = logging.getLogger("learning_tracker.auth")
 router = APIRouter(prefix="/api")
@@ -48,12 +52,21 @@ class MeOut(BaseModel):
 Manager = Annotated[UserManager, Depends(user_manager)]
 Sessions = Annotated[SessionStore, Depends(session_store)]
 CurrentUser = Annotated[User, Depends(current_user)]
+Limiter = Annotated[RateLimiter, Depends(rate_limiter)]
 
 
 @router.post("/auth/login", status_code=status.HTTP_204_NO_CONTENT)
 async def login(
-    body: LoginIn, request: Request, db: DB, manager: Manager, sessions: Sessions
+    body: LoginIn,
+    request: Request,
+    db: DB,
+    manager: Manager,
+    sessions: Sessions,
+    limiter: Limiter,
 ) -> Response:
+    # Counted before the password is checked: a limited caller costs no hashing.
+    await enforce(limiter, LOGIN_PER_IP, client_ip(request))
+    await enforce(limiter, PASSWORD_PER_ACCOUNT, body.email.lower())
     user = await manager.sign_in(body.email, body.password)
     if user is None:
         log.info("auth.login_failed")
@@ -94,7 +107,10 @@ async def change_password(
     user: CurrentUser,
     manager: Manager,
     sessions: Sessions,
+    limiter: Limiter,
 ) -> Response:
+    # Shares the sign-in bucket, so a stolen session can't brute-force the password.
+    await enforce(limiter, PASSWORD_PER_ACCOUNT, user.email.lower())
     if not manager.check_password(user, body.current_password):
         log.info("auth.password_change_failed user_id=%s", user.id)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is wrong")

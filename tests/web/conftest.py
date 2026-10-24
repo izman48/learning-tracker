@@ -23,6 +23,7 @@ def config(migrated_database_url: str) -> WebConfig:
         session_key=SESSION_KEY,
         session_lifetime=timedelta(days=30),
         public_origin=ORIGIN,
+        ip_key=b"i" * 32,
     )
 
 
