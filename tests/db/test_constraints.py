@@ -64,3 +64,42 @@ def test_deleting_a_user_deletes_their_sessions(engine: Engine) -> None:
 
     with engine.connect() as conn:
         assert conn.execute(select(Session)).all() == []
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"cap_micros": -1, "used_micros": 0},
+        {"cap_micros": 10, "used_micros": -1},
+    ],
+)
+def test_spend_period_amounts_cannot_go_negative(engine: Engine, values: dict[str, int]) -> None:
+    from datetime import date
+
+    from learning_tracker.db.models import SpendPeriod
+
+    row = {"scope_key": "instance", "period_kind": "month", "period_start": date(2026, 10, 1)}
+    with engine.begin() as conn:  # precondition: a valid row, used past its cap, is accepted
+        conn.execute(insert(SpendPeriod).values(**row, cap_micros=10, used_micros=12))
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(insert(SpendPeriod).values({**row, "scope_key": "user:x", **values}))
+
+
+def test_a_spend_ledger_row_survives_its_user_detached(engine: Engine) -> None:
+    from learning_tracker.db.models import SpendLedger
+
+    user_id = add_user(engine, "a@example.com")
+    with engine.begin() as conn:
+        conn.execute(
+            insert(SpendLedger).values(
+                scope_user_id=user_id,
+                step="screen",
+                model="claude-haiku-5-5",
+                reserved_micros=500,
+                state="reserved",
+            )
+        )
+        conn.execute(delete(User).where(User.id == user_id))
+    with engine.connect() as conn:
+        rows = conn.execute(select(SpendLedger.scope_user_id, SpendLedger.reserved_micros)).all()
+    assert rows == [(None, 500)]
