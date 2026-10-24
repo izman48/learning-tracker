@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
+from anyio import to_thread
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,6 +14,7 @@ from learning_tracker.web.auth.deps import (
     client_ip,
     current_user,
     enforce,
+    password_slot,
     rate_limiter,
     session_store,
     user_manager,
@@ -20,7 +22,12 @@ from learning_tracker.web.auth.deps import (
 from learning_tracker.web.auth.manager import UserManager
 from learning_tracker.web.auth.passwords import MAX_PASSWORD, MIN_PASSWORD
 from learning_tracker.web.auth.sessions import COOKIE_NAME, SessionStore, cookie_transport
-from learning_tracker.web.ratelimit import LOGIN_PER_IP, PASSWORD_PER_ACCOUNT, RateLimiter
+from learning_tracker.web.ratelimit import (
+    LOGIN_PER_IP,
+    PASSWORD_PER_ACCOUNT,
+    RateLimiter,
+    account_subject,
+)
 
 log = logging.getLogger("learning_tracker.auth")
 router = APIRouter(prefix="/api")
@@ -66,8 +73,13 @@ async def login(
 ) -> Response:
     # Counted before the password is checked: a limited caller costs no hashing.
     await enforce(limiter, LOGIN_PER_IP, client_ip(request))
-    await enforce(limiter, PASSWORD_PER_ACCOUNT, body.email.lower())
-    user = await manager.sign_in(body.email, body.password)
+    found = await manager.user_db.get_by_email(body.email)
+    await enforce(
+        limiter, PASSWORD_PER_ACCOUNT, account_subject(found.id if found else None, body.email)
+    )
+    async with password_slot(request):
+        matches = await to_thread.run_sync(manager.password_matches, found, body.password)
+    user = found if matches else None
     if user is None:
         log.info("auth.login_failed")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, BAD_CREDENTIALS)
@@ -103,6 +115,7 @@ async def me(user: CurrentUser) -> MeOut:
 @router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
     body: PasswordChangeIn,
+    request: Request,
     db: DB,
     user: CurrentUser,
     manager: Manager,
@@ -110,14 +123,17 @@ async def change_password(
     limiter: Limiter,
 ) -> Response:
     # Shares the sign-in bucket, so a stolen session can't brute-force the password.
-    await enforce(limiter, PASSWORD_PER_ACCOUNT, user.email.lower())
-    if not manager.check_password(user, body.current_password):
+    await enforce(limiter, PASSWORD_PER_ACCOUNT, account_subject(user.id, user.email))
+    async with password_slot(request):
+        current_ok = await to_thread.run_sync(manager.check_password, user, body.current_password)
+        new_hash = await to_thread.run_sync(manager.password_helper.hash, body.new_password)
+    if not current_ok:
         log.info("auth.password_change_failed user_id=%s", user.id)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is wrong")
     await manager.user_db.update(
         user,
         {
-            "hashed_password": manager.password_helper.hash(body.new_password),
+            "hashed_password": new_hash,
             "password_changed_at": datetime.now(UTC),
             "password_changed_via": PasswordChangeSource.USER,
         },

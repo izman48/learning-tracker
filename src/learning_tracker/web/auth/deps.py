@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address, ip_network
 from typing import Annotated
@@ -12,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from learning_tracker.db.models import User
 from learning_tracker.web.auth.manager import UserManager
 from learning_tracker.web.auth.sessions import COOKIE_NAME, SessionStore
+from learning_tracker.web.auth.slots import PasswordSlots
 from learning_tracker.web.auth.users import UserStore
 from learning_tracker.web.config import WebConfig
-from learning_tracker.web.ratelimit import TOO_MANY, Limit, RateLimiter
+from learning_tracker.web.ratelimit import TOO_MANY, Limit, RateLimiter, ip_subject
 
 log = logging.getLogger("learning_tracker.web")
 
@@ -60,11 +62,13 @@ _PROXY_NETWORKS = tuple(
 
 
 def client_ip(request: Request) -> str:
-    """The caller's address. Behind a declared proxy, uvicorn has already replaced it
-    with the forwarded one (--forwarded-allow-ips); we never read X-Forwarded-For."""
+    """The caller's rate-limit subject: the IPv4 address, or the IPv6 /64.
+
+    Behind a declared proxy, uvicorn has already replaced the socket address with the
+    forwarded one (--forwarded-allow-ips); we never read X-Forwarded-For."""
     ip = request.client.host if request.client else "unknown"
     _warn_if_undeclared_proxy(request, ip)
-    return ip
+    return ip_subject(ip)
 
 
 def _warn_if_undeclared_proxy(request: Request, ip: str) -> None:
@@ -84,6 +88,13 @@ def _warn_if_undeclared_proxy(request: Request, ip: str) -> None:
     if last is None or now - last >= _PROXY_WARNING_EVERY:
         state.proxy_warning_at = now
         log.warning(PROXY_WARNING)
+
+
+@asynccontextmanager
+async def password_slot(request: Request) -> AsyncIterator[None]:
+    slots: PasswordSlots = request.app.state.password_slots
+    async with slots.slot():
+        yield
 
 
 def user_manager(db: DB) -> UserManager:

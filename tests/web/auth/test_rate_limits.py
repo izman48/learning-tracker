@@ -167,3 +167,63 @@ def test_no_warning_when_a_trusted_proxy_is_declared(
         login(client, "a@example.com")
 
     assert not [r for r in caplog.records if "LT_TRUSTED_PROXY_IPS" in r.getMessage()]
+
+
+def test_ipv6_callers_share_a_budget_per_64(from_ip: Callable[[str], TestClient]) -> None:
+    # One host can hold a whole /64; rotating through it must not reset the budget.
+    for i in range(5):
+        assert login(from_ip(f"2001:db8:1:2::{i + 1:x}"), f"u{i}@example.com") == 400
+
+    assert login(from_ip("2001:db8:1:2:ffff::9"), "x@example.com") == 429  # same /64
+    assert login(from_ip("2001:db8:1:3::1"), "x@example.com") == 400  # next /64
+
+
+def test_ipv4_mapped_ipv6_counts_as_the_ipv4_address(
+    from_ip: Callable[[str], TestClient],
+) -> None:
+    for i in range(5):
+        login(from_ip("203.0.113.5"), f"u{i}@example.com")
+
+    assert login(from_ip("::ffff:203.0.113.5"), "x@example.com") == 429
+
+
+def test_account_bucket_follows_the_user_not_the_typed_email(
+    from_ip: Callable[[str], TestClient], add_user: AddUser
+) -> None:
+    add_user()
+    # Unicode case forms that Python's lower() leaves apart still reach one account
+    # bucket, because a found user is keyed by id.
+    variants = ["reader@example.com", "READER@EXAMPLE.COM", "Reader@Example.com"]
+    for i in range(10):
+        login(from_ip(f"203.0.113.{i // 2 + 1}"), variants[i % 3])
+
+    assert login(from_ip("198.51.100.9"), "reader@example.com", PASSWORD) == 429
+
+
+def test_unknown_emails_are_bucketed_by_a_normalised_form(
+    from_ip: Callable[[str], TestClient],
+) -> None:
+    for i in range(10):
+        login(
+            from_ip(f"203.0.113.{i // 2 + 1}"),
+            "ghost@example.com" if i % 2 else " GHOST@example.com",
+        )
+
+    assert login(from_ip("198.51.100.9"), "ghost@EXAMPLE.com") == 429
+
+
+def test_password_hashing_fails_fast_when_every_slot_is_busy(
+    from_ip: Callable[[str], TestClient], add_user: AddUser
+) -> None:
+    add_user()
+    client = from_ip("203.0.113.5")
+    client.app.state.password_slots.capacity = 0  # type: ignore[attr-defined]
+
+    response = client.post(
+        "/api/auth/login", json={"email": "reader@example.com", "password": PASSWORD}
+    )
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    client.app.state.password_slots.capacity = 1  # type: ignore[attr-defined]
+    assert login(client, "reader@example.com", PASSWORD) == 204  # precondition: slots work

@@ -8,8 +8,11 @@ when the request then fails (a wrong password), and two web processes share coun
 import hashlib
 import hmac
 import math
+import unicodedata
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from ipaddress import IPv6Address, ip_address, ip_network
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -40,6 +43,27 @@ class Limit:
 LOGIN_PER_IP = Limit("login-ip", 5, timedelta(minutes=1))
 # Every password re-entry (sign-in, change password, later delete account) shares this.
 PASSWORD_PER_ACCOUNT = Limit("password-account", 10, timedelta(minutes=15))
+
+
+def ip_subject(ip: str) -> str:
+    """IPv4 per address; IPv6 per /64, since one host can hold a whole /64."""
+    try:
+        address = ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(address, IPv6Address):
+        if address.ipv4_mapped is not None:
+            return str(address.ipv4_mapped)
+        return str(ip_network(f"{address}/64", strict=False))
+    return str(address)
+
+
+def account_subject(user_id: uuid.UUID | None, typed_email: str) -> str:
+    """A found account is keyed by its id; an unknown email by a normalised form, so
+    case and Unicode variants of one address share a bucket either way."""
+    if user_id is not None:
+        return f"user:{user_id}"
+    return "email:" + unicodedata.normalize("NFKC", typed_email).strip().casefold()
 
 
 class RateLimiter:
