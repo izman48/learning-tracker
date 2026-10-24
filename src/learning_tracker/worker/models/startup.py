@@ -12,9 +12,16 @@ from typing import Any
 
 import anthropic
 
-from learning_tracker.worker.models.client import ModelTuning
+from learning_tracker.worker.models.client import ModelTuning, make_sdk_client
 
 SEARCH_SETTING = "LT_MODEL_SEARCH"
+# A startup lookup is small; a provider that does not answer quickly is reported as
+# unreachable rather than holding the worker's start for a minute per model.
+CHECK_TIMEOUT_S = 10.0
+
+
+def models_api_client(api_key: str) -> anthropic.AsyncAnthropic:
+    return make_sdk_client(api_key, timeout_s=CHECK_TIMEOUT_S)
 
 
 @dataclass(frozen=True)
@@ -48,7 +55,9 @@ async def check_models(
         if info is None:
             problems.append(f"{name}: model not found")
             continue
-        lifecycle = getattr(info, "lifecycle", "active")
+        lifecycle = getattr(info, "lifecycle", None)
+        if lifecycle is None:
+            warnings.append(f"{name}: model lifecycle unknown")
         if lifecycle == "retired":
             problems.append(f"{name}: model is retired")
             continue
