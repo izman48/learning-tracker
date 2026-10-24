@@ -51,7 +51,8 @@ def _s(
 
 SETTINGS: tuple[Setting, ...] = (
     _s("LT_SECRET_KEY", _WW, v.secret_key, required=_WW, secret=True, attr="keys"),
-    _s("LT_DB_PASSWORD", _WW, v.secret, required=_WW, secret=True),
+    # Required unless LT_DATABASE_URL is given (checked in the loader).
+    _s("LT_DB_PASSWORD", _WW, v.secret, secret=True),
     _s("LT_DATABASE_URL", _WW, v.postgres_url, secret=True),
     _s("LT_PUBLIC_ORIGIN", _WW, v.origin, required=_WW),
     _s("LT_ANTHROPIC_API_KEY", WORKER, v.secret, required=(WORKER,), secret=True),
@@ -91,7 +92,8 @@ SETTINGS: tuple[Setting, ...] = (
     _s("LT_RETENTION_DAYS_LISTS", WORKER, v.integer(30, 365), "90"),
     _s("LT_RETENTION_DAYS_RUNS", WORKER, v.integer(7, 365), "90"),
     _s("LT_FETCH_CONTACT_URL", FETCHER, v.https_url, _REPO_URL),
-    _s("LT_SMTP_HOST", WORKER, v.hostname),
+    # Web only needs to know a mailer exists; the credentials stay in the worker.
+    _s("LT_SMTP_HOST", _WW, v.hostname),
     _s("LT_SMTP_PORT", WORKER, v.port_of(587, 465), "587"),
     _s("LT_SMTP_TLS", WORKER, v.one_of("required"), "required"),
     _s("LT_SMTP_USER", WORKER, v.plain_text),
@@ -161,6 +163,12 @@ class Settings:
     smtp_from: str | None
     reset_token_minutes: int
     confirm_token_hours: int
+
+    def require_keys(self) -> Keys:
+        """The HKDF subkeys; web and worker always have them."""
+        if self.keys is None:
+            raise RuntimeError(f"{self.service} has no keys")
+        return self.keys
 
     @property
     def mailer_enabled(self) -> bool:

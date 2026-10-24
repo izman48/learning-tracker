@@ -89,6 +89,8 @@ def _shown(setting: Setting, raw: str) -> str:
 
 def _cross_checks(service: str, given: Mapping[str, str], values: Mapping[str, Any]) -> list[str]:
     problems = []
+    if service in ("web", "worker") and values["database_url"] is None:
+        problems.append(f"LT_DB_PASSWORD is required for {service} (or set LT_DATABASE_URL)")
     origin = values["public_origin"]
     if values["debug"] and not (origin and urlsplit(origin).hostname in LOCAL_HOSTS):
         problems.append("LT_DEBUG=true is refused unless LT_PUBLIC_ORIGIN is a localhost origin")

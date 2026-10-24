@@ -203,3 +203,26 @@ def test_catalogue_declares_each_variable_once_with_an_owner() -> None:
     assert len(names) == len(set(names)) == 49  # every row of the documented table
     assert all(setting.services for setting in SETTINGS)
     assert all(setting.name.startswith("LT_") for setting in SETTINGS)
+
+
+def test_web_sees_that_a_mailer_is_configured_but_never_holds_its_secrets() -> None:
+    # Web answers the auth options call and picks email vs admin reset from this flag.
+    assert load("web").mailer_enabled is False  # precondition
+    assert load("web", LT_SMTP_HOST="smtp.example.com").mailer_enabled is True
+    for name in ("LT_SMTP_PASSWORD", "LT_SMTP_USER", "LT_SMTP_FROM"):
+        msg = problems("web", LT_SMTP_HOST="smtp.example.com", **{name: "x"})
+        assert f"{name} " in msg and "web" in msg
+    assert "LT_SMTP_PASSWORD must not be given to web" in problems("web", LT_SMTP_PASSWORD="x")
+
+
+def test_db_password_is_not_needed_when_an_external_database_url_is_given() -> None:
+    url = "postgresql+psycopg://app:pw@db.example.com:5432/reads"
+    s = load("web", LT_DB_PASSWORD=None, LT_DATABASE_URL=url)
+    assert s.database_url is not None and s.database_url.reveal() == url
+    assert "LT_DB_PASSWORD is required for web" in problems("web", LT_DB_PASSWORD=None)
+
+
+def test_require_keys_returns_the_subkeys_or_fails_loudly() -> None:
+    assert len(load("worker").require_keys().reset) == 32
+    with pytest.raises(RuntimeError, match="fetcher has no keys"):
+        load("fetcher").require_keys()
