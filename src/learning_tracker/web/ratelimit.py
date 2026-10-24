@@ -7,11 +7,10 @@ when the request then fails (a wrong password), and two web processes share coun
 
 import hashlib
 import hmac
-import math
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from ipaddress import IPv6Address, ip_address, ip_network
 
 from sqlalchemy import text
@@ -19,15 +18,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 TOO_MANY = "Too many tries. Wait a few minutes, then try again."  # spec AUTH-5/9
 
+# Windows are aligned and timed on the database's clock only, so web processes and
+# hosts with different clocks agree on them.
 _HIT = text(
     """
     INSERT INTO rate_limit_buckets (key, window_start, count)
-    VALUES (:key, :window_start, 1)
+    VALUES (:key, to_timestamp(floor(extract(epoch FROM now()) / :seconds) * :seconds), 1)
     ON CONFLICT (key) DO UPDATE SET
       count = CASE WHEN rate_limit_buckets.window_start = EXCLUDED.window_start
                    THEN rate_limit_buckets.count + 1 ELSE 1 END,
       window_start = EXCLUDED.window_start
-    RETURNING count
+    RETURNING count,
+      ceil(extract(epoch FROM window_start + make_interval(secs => :seconds) - now()))::int
     """
 )
 
@@ -77,16 +79,10 @@ class RateLimiter:
 
     async def hit(self, limit: Limit, subject: str) -> int | None:
         """Count one attempt. None if allowed, else the seconds until the window ends."""
-        now = datetime.now(UTC)
-        seconds = limit.window.total_seconds()
-        start = datetime.fromtimestamp(math.floor(now.timestamp() / seconds) * seconds, UTC)
+        params = {"key": self.bucket_key(limit, subject), "seconds": limit.window.total_seconds()}
         async with self._sessions() as session:
-            count = (
-                await session.execute(
-                    _HIT, {"key": self.bucket_key(limit, subject), "window_start": start}
-                )
-            ).scalar_one()
+            count, remaining = (await session.execute(_HIT, params)).one()
             await session.commit()
         if count <= limit.max_hits:
             return None
-        return max(1, math.ceil((start + limit.window - now).total_seconds()))
+        return max(1, int(remaining))
