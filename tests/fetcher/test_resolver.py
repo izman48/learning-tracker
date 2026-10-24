@@ -2,17 +2,15 @@
 then uses only the vetted answer. Every refusal has a positive control through the
 same harness."""
 
-import socket
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 
 import aiohttp
 import pytest
 from aiohttp import web
-from aiohttp.abc import AbstractResolver, ResolveResult
 from aiohttp.test_utils import TestServer
 
-from learning_tracker.fetcher.addresses import is_public_address
 from learning_tracker.fetcher.resolver import SafeResolver, UnsafeAddress, safe_connector
+from tests.fetcher.harness import FakeDNS, only_the_harness_is_public
 
 pytestmark = pytest.mark.anyio
 
@@ -20,35 +18,6 @@ pytestmark = pytest.mark.anyio
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"  # aiohttp runs on asyncio only
-
-
-class FakeDNS(AbstractResolver):
-    """Answers from a table, and records each lookup."""
-
-    def __init__(self, table: dict[str, list[str]]) -> None:
-        self.table = table
-        self.lookups: list[str] = []
-
-    async def resolve(
-        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_UNSPEC
-    ) -> list[ResolveResult]:
-        self.lookups.append(host)
-        if host not in self.table:
-            raise OSError(f"no such host {host}")
-        return [
-            ResolveResult(
-                hostname=host,
-                host=ip,
-                port=port,
-                family=socket.AF_INET6 if ":" in ip else socket.AF_INET,
-                proto=0,
-                flags=0,
-            )
-            for ip in self.table[host]
-        ]
-
-    async def close(self) -> None:
-        pass
 
 
 DNS = {
@@ -121,11 +90,6 @@ async def local_server() -> AsyncIterator[TestServer]:
     await server.start_server()
     yield server
     await server.close()
-
-
-def only_the_harness_is_public(harness_ip: str) -> Callable[[str], bool]:
-    """Test policy: the local server stands in for a public host; nothing else changes."""
-    return lambda ip: ip == harness_ip or is_public_address(ip)
 
 
 async def test_session_refuses_metadata_host_and_still_reaches_the_control(

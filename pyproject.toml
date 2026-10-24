@@ -11,6 +11,7 @@ dependencies = [
     "fastapi==0.143.0",
     "fastapi-users==15.0.5",
     "psycopg[binary]==3.3.6",
+    "publicsuffixlist==1.1.0.20261010",
     "sqlalchemy[asyncio]==2.1.4",
     "uvicorn==0.54.0",
     "yarl==1.25.1",
